@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Power Distribution System</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="22" height="22"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z" fill="currentColor"/></svg>
+    </span>
+    <span class="brand-text">DISTRIBUTION MANAGEMENT</span>
+  </div>
+  <nav class="tabs" id="nav-tabs">
+    <a href="#/dashboard" data-tab="dashboard">Dashboard</a>
+    <a href="#/explorer" data-tab="explorer">Explorer</a>
+    <a href="#/sld" data-tab="sld">Single Line Diagram</a>
+    <a href="#/activity" data-tab="activity">Activity</a>
+  </nav>
+  <div class="search" id="search">
+    <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="m16.5 16.5 4 4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    <input id="search-input" type="search" placeholder="Search MCCB / MCB / circuit…" autocomplete="off" spellcheck="false">
+    <div class="search-results" id="search-results" hidden></div>
+  </div>
+  <div class="date" id="today"></div>
+  <label class="role">Role:
+    <select id="role-select">
+      <option value="supervisor">Supervisor</option>
+      <option value="technician">Technician</option>
+      <option value="viewer">Viewer</option>
+    </select>
+  </label>
+  <button class="icon-btn" id="settings-btn" title="Settings" aria-label="Settings">
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+  </button>
+</header>
+
+<main id="app" class="app"></main>
+
+<div id="modal-root"></div>
+<div id="toast-root" class="toasts" aria-live="polite"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

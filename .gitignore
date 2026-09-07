@@ -1,0 +1,14 @@
+# Build output
+/dist/
+/pds
+/pds.exe
+*.log
+
+# Local config (contains database credentials)
+/config.json
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
