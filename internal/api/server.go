@@ -703,7 +703,7 @@ func (s *Server) handleMCBUpdate(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	if err := s.Store.UpdateMCB(ctx(r), roleOf(r), model.MCB{ID: id, Name: strings.TrimSpace(in.Name), RatingA: in.RatingA}); err != nil {
+	if err := s.Store.UpdateMCB(ctx(r), roleOf(r), model.MCB{ID: id, MCCBID: in.MCCBID, Name: strings.TrimSpace(in.Name), RatingA: in.RatingA}); err != nil {
 		fail(w, err)
 		return
 	}

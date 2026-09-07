@@ -911,16 +911,34 @@ func (s *Store) CreateMCB(ctx context.Context, role string, m model.MCB) (int64,
 	return id, err
 }
 
+// UpdateMCB renames, re-rates and optionally re-parents an MCB. A zero MCCBID
+// leaves the MCB where it is, so callers that only rename need not know it.
 func (s *Store) UpdateMCB(ctx context.Context, role string, m model.MCB) error {
 	return s.withTx(ctx, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `UPDATE mcbs SET name = $2, rating_a = $3, updated_at = now() WHERE id = $1`, m.ID, m.Name, m.RatingA)
+		var oldParent, newParent string
+		err := tx.QueryRow(ctx, `SELECT old.name, new.name FROM mcbs mb
+			JOIN mccbs old ON old.id = mb.mccb_id
+			JOIN mccbs new ON new.id = coalesce(nullif($2::bigint, 0), mb.mccb_id)
+			WHERE mb.id = $1`, m.ID, m.MCCBID).Scan(&oldParent, &newParent)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
+		}
+		tag, err := tx.Exec(ctx, `UPDATE mcbs SET mccb_id = coalesce(nullif($2::bigint, 0), mccb_id),
+			name = $3, rating_a = $4, updated_at = now() WHERE id = $1`, m.ID, m.MCCBID, m.Name, m.RatingA)
 		if err != nil {
 			return err
 		}
 		if tag.RowsAffected() == 0 {
 			return ErrNotFound
 		}
-		return s.audit(ctx, tx, role, "update", "mcb", m.ID, fmt.Sprintf("Updated %s (%g A)", m.Name, m.RatingA))
+		summary := fmt.Sprintf("Updated %s (%g A)", m.Name, m.RatingA)
+		if oldParent != newParent {
+			summary = fmt.Sprintf("Moved %s (%g A) from %s to %s", m.Name, m.RatingA, oldParent, newParent)
+		}
+		return s.audit(ctx, tx, role, "update", "mcb", m.ID, summary)
 	})
 }
 

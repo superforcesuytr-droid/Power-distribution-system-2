@@ -9,6 +9,10 @@ the interface in a native window and talks to your PostgreSQL server directly.
 
 ![Dashboard](docs/screenshot-dashboard.png)
 
+The single line diagram is drawn from the same data and can be edited directly:
+
+![Single line diagram](docs/screenshot-sld.png)
+
 ## Features
 
 - **Dashboard** - buildings sidebar, per-board totals (total current, MCB
@@ -18,7 +22,12 @@ the interface in a native window and talks to your PostgreSQL server directly.
 - **Explorer** - flat, filterable table of every circuit across the site with
   CSV export.
 - **Single Line Diagram** - auto-generated SLD of any board, colour-coded by
-  load level; click a breaker to jump to it on the dashboard.
+  load level, and **editable in place**: the pencil on any breaker changes its
+  name or rating, the bin deletes it, and the `+ MCCB` / `+ MCB` controls on the
+  busbars add new ones. The drawing redraws itself immediately after every
+  change, so a whole board can be built up from an empty diagram. An MCB can
+  also be moved to a different MCCB and the diagram re-routes it. Clicking a
+  breaker body opens it on the dashboard.
 - **Activity** - audit log of every change (who, what, when).
 - **Global search** across boards, MCCBs, MCBs and circuits.
 - **Roles** - Viewer (read only), Technician (add/edit breakers and circuits),
@@ -120,6 +129,8 @@ buildings ─< boards ─< mccbs ─< mcbs ─< circuits
   sum of MCB ratings.
 - Deleting a parent removes everything beneath it (confirmed in the UI and
   restricted to the Supervisor role).
+- An MCB can be re-parented onto another MCCB; breaker names must be unique
+  within their parent.
 
 ## Security notes
 

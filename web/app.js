@@ -495,43 +495,81 @@
           <span><i style="background:var(--red)"></i>Critical &gt; ${st.crit_pct}%</span>
           <span class="faint" style="margin-left:auto">Capacity = rating × ${st.trip_factor}</span>
         </div>
+        ${canEdit() ? '<p class="sld-hint">Edit the diagram directly: <b>✎</b> changes a breaker\'s name or rating, <b>+ MCCB</b> and <b>+ MCB</b> add one, and the drawing redraws itself immediately. Click a breaker body to open it on the dashboard.</p>' : ''}
         <div class="sld-canvas">${sldSVG(b)}</div>` : '<div class="empty"><h2>No board to draw</h2></div>'}
       </div>`;
+    applyFocus();
+  }
+
+  // Icons drawn as paths so they stay crisp and match the line colours.
+  const SLD_ICONS = {
+    edit: '<path d="M3.4 16.6h3.2L17 6.2a1.7 1.7 0 0 0-2.4-2.4L4.2 14.2v2.4z"/>',
+    del: '<path d="M4 6h13M8.2 6V4.2h4.6V6M5.7 6l.9 10.8h7L14.4 6"/>',
+  };
+
+  function sldIconBtn(x, y, icon, action, id, title, col) {
+    return `<g class="sld-btn" data-action="${action}" data-id="${id}"><title>${esc(title)}</title>` +
+      `<rect x="${x}" y="${y}" width="26" height="26" rx="7" fill="#fff" stroke="${col}" stroke-opacity=".4"/>` +
+      `<g transform="translate(${x + 3} ${y + 3})" fill="none" stroke="${col}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${SLD_ICONS[icon]}</g></g>`;
+  }
+
+  function sldPill(cx, cy, w, label, attrs, col, title) {
+    return `<g class="sld-pill" ${attrs}><title>${esc(title)}</title>` +
+      `<rect x="${cx - w / 2}" y="${cy - 14}" width="${w}" height="28" rx="14" fill="#fff" stroke="${col}" stroke-width="1.6"/>` +
+      `<text x="${cx}" y="${cy + 5}" text-anchor="middle" font-size="13" font-weight="700" fill="${col}">${esc(label)}</text></g>`;
   }
 
   function sldSVG(b) {
     const COLORS = { normal: '#0f8a4f', warning: '#d97a06', critical: '#d32f2f', bus: '#0b74c4' };
+    const edit = canEdit(), manage = canManage();
     const NODE_W = 178, NODE_H = 150, MCB_GAP = 22, MCCB_W = 226, MCCB_H = 150, GROUP_GAP = 64, MARGIN = 40;
     const groups = b.mccbs.map(m => {
       const n = Math.max(1, m.mcbs.length);
       return { m, width: Math.max(MCCB_W, n * NODE_W + (n - 1) * MCB_GAP) };
     });
+    const anyMCB = groups.some(g => g.m.mcbs.length);
     const contentW = groups.reduce((s, g) => s + g.width, 0) + Math.max(0, groups.length - 1) * GROUP_GAP;
-    const W = Math.max(520, contentW + MARGIN * 2);
-    const supplyY = 30, busY = supplyY + 120, mccbSwY = busY + 26, mccbBoxY = busY + 86;
-    const mcbBusY = mccbBoxY + MCCB_H + 56, mcbSwY = mcbBusY + 26, mcbBoxY = mcbBusY + 86;
-    const H = (groups.length ? mcbBoxY + NODE_H : busY + 60) + MARGIN;
-    const cx0 = W / 2;
-    let out = [];
-    // incoming supply
+    const rightExtra = edit ? 130 : 0;
+    const W = Math.max(560, contentW + MARGIN * 2 + rightExtra);
+    const supplyY = 30, busY = supplyY + 120;
+    const mccbSwY = busY + 26, mccbBoxY = busY + 86;
+    const dropGap = edit ? 84 : 56;
+    const mcbBusY = mccbBoxY + MCCB_H + dropGap, mcbSwY = mcbBusY + 26, mcbBoxY = mcbBusY + 86;
+    const addMcbY = mccbBoxY + MCCB_H + 42;
+    let H;
+    if (!groups.length) H = busY + 110;
+    else if (!anyMCB) H = mccbBoxY + MCCB_H + (edit ? 90 : 40);
+    else H = mcbBoxY + NODE_H + MARGIN;
+
+    const startX = MARGIN + (W - MARGIN * 2 - rightExtra - contentW) / 2;
+    const centers = [];
+    let x = startX;
+    groups.forEach(g => { centers.push(x + g.width / 2); x += g.width + GROUP_GAP; });
+    const cCenter = groups.length ? startX + contentW / 2 : W / 2;
+
+    const out = [];
+    // Incoming supply: transformer squiggle and drop to the main busbar.
     out.push(`<g stroke="${COLORS.bus}" stroke-width="3" fill="none" stroke-linecap="round">
-      <line x1="${cx0}" y1="${supplyY}" x2="${cx0}" y2="${busY}"/>
-      ${[0, 1, 2].map(i => `<path d="M ${cx0 - 11} ${supplyY + 22 + i * 14} q 5.5 -8 11 0 t 11 0"/>`).join('')}
+      <line x1="${cCenter}" y1="${supplyY}" x2="${cCenter}" y2="${busY}"/>
+      ${[0, 1, 2].map(i => `<path d="M ${cCenter - 11} ${supplyY + 22 + i * 14} q 5.5 -8 11 0 t 11 0"/>`).join('')}
     </g>
-    <text x="${cx0 + 22}" y="${supplyY + 26}" font-size="14" font-weight="700" fill="${COLORS.bus}">3~ ${esc(b.voltage)} ${esc(b.phases)}</text>
-    <text x="${cx0 + 22}" y="${supplyY + 45}" font-size="11" fill="#94a3b8" letter-spacing="1.5">INCOMING SUPPLY</text>`);
+    <text x="${cCenter + 22}" y="${supplyY + 26}" font-size="14" font-weight="700" fill="${COLORS.bus}">3~ ${esc(b.voltage)} ${esc(b.phases)}</text>
+    <text x="${cCenter + 22}" y="${supplyY + 45}" font-size="11" fill="#94a3b8" letter-spacing="1.5">INCOMING SUPPLY</text>`);
+
+    // Main busbar, extended to the right to carry the "add MCCB" control.
+    let busL, busR;
+    if (groups.length > 1) { busL = Math.min(centers[0], cCenter); busR = Math.max(centers[centers.length - 1], cCenter); }
+    else { busL = cCenter - 110; busR = cCenter + 110; }
+    const addMccbX = busR + 64;
+    const busEnd = edit ? addMccbX - 38 : busR;
+    out.push(`<line x1="${busL}" y1="${busY}" x2="${busEnd}" y2="${busY}" stroke="${COLORS.bus}" stroke-width="6" stroke-linecap="round"/>`);
+    out.push(`<circle cx="${cCenter}" cy="${busY}" r="5" fill="${COLORS.bus}"/>`);
+    if (edit) out.push(sldPill(addMccbX, busY, 76, '+ MCCB', 'data-action="add-mccb"', COLORS.bus, 'Add an MCCB to this board'));
+
     if (!groups.length) {
-      out.push(`<line x1="${cx0 - 120}" y1="${busY}" x2="${cx0 + 120}" y2="${busY}" stroke="${COLORS.bus}" stroke-width="6" stroke-linecap="round"/>
-        <text x="${cx0}" y="${busY + 40}" text-anchor="middle" font-size="13" fill="#64748b">No MCCBs on this board</text>`);
+      out.push(`<text x="${cCenter}" y="${busY + 46}" text-anchor="middle" font-size="13" fill="#64748b">No MCCBs on this board${edit ? ' - use + MCCB to add the first one' : ''}</text>`);
       return wrap(W, H, out.join(''));
     }
-    // main bus
-    let x = MARGIN + (W - MARGIN * 2 - contentW) / 2;
-    const centers = [];
-    groups.forEach(g => { centers.push(x + g.width / 2); x += g.width + GROUP_GAP; });
-    const busX1 = groups.length > 1 ? centers[0] : cx0 - 120, busX2 = groups.length > 1 ? centers[centers.length - 1] : cx0 + 120;
-    out.push(`<line x1="${Math.min(busX1, cx0)}" y1="${busY}" x2="${Math.max(busX2, cx0)}" y2="${busY}" stroke="${COLORS.bus}" stroke-width="6" stroke-linecap="round"/>`);
-    out.push(`<circle cx="${cx0}" cy="${busY}" r="5" fill="${COLORS.bus}"/>`);
 
     groups.forEach((g, gi) => {
       const m = g.m, cx = centers[gi], col = COLORS[m.level] || COLORS.normal;
@@ -539,22 +577,41 @@
       out.push(`<line x1="${cx}" y1="${busY}" x2="${cx}" y2="${mccbBoxY}" stroke="${col}" stroke-width="3"/>`);
       out.push(breakerSymbol(cx, mccbSwY, col));
       out.push(nodeBox(cx - MCCB_W / 2, mccbBoxY, MCCB_W, MCCB_H, col, 'MCCB', m.name,
-        [`Rated ${fmtA(m.rating_a)} A`, { text: `${fmtA(m.current)} A used`, color: col, bold: true }], m.pct, 'mccb-' + m.id));
-      if (!m.mcbs.length) return;
+        [`Rated ${fmtA(m.rating_a)} A`, { text: `${fmtA(m.current)} A used`, color: col, bold: true },
+          `${m.mcb_count} MCB${m.mcb_count === 1 ? '' : 's'} · ${m.circuit_count} cct${m.circuit_count === 1 ? '' : 's'}`],
+        m.pct, 'mccb-' + m.id, [
+          edit ? { icon: 'edit', action: 'edit-mccb', id: m.id, title: 'Edit ' + m.name } : null,
+          manage ? { icon: 'del', action: 'delete-mccb', id: m.id, title: 'Delete ' + m.name } : null,
+        ]));
+
       const n = m.mcbs.length;
+      if (!n) {
+        if (edit) {
+          out.push(`<line x1="${cx}" y1="${mccbBoxY + MCCB_H}" x2="${cx}" y2="${addMcbY - 14}" stroke="${col}" stroke-width="3" stroke-dasharray="5 5"/>`);
+          out.push(sldPill(cx, addMcbY, 74, '+ MCB', `data-action="add-mcb" data-id="${m.id}"`, col, 'Add an MCB under ' + m.name));
+        }
+        return;
+      }
       const spanW = n * NODE_W + (n - 1) * MCB_GAP;
-      const startX = cx - spanW / 2;
+      const left = cx - spanW / 2;
       out.push(`<line x1="${cx}" y1="${mccbBoxY + MCCB_H}" x2="${cx}" y2="${mcbBusY}" stroke="${col}" stroke-width="3"/>`);
-      if (n > 1) out.push(`<line x1="${startX + NODE_W / 2}" y1="${mcbBusY}" x2="${startX + spanW - NODE_W / 2}" y2="${mcbBusY}" stroke="${col}" stroke-width="3" stroke-linecap="round"/>`);
+      if (n > 1) out.push(`<line x1="${left + NODE_W / 2}" y1="${mcbBusY}" x2="${left + spanW - NODE_W / 2}" y2="${mcbBusY}" stroke="${col}" stroke-width="3" stroke-linecap="round"/>`);
       m.mcbs.forEach((mb, i) => {
-        const mx = startX + i * (NODE_W + MCB_GAP) + NODE_W / 2;
+        const mx = left + i * (NODE_W + MCB_GAP) + NODE_W / 2;
         const mcol = COLORS[mb.level] || COLORS.normal;
         out.push(`<circle cx="${mx}" cy="${mcbBusY}" r="4" fill="${mcol}"/>`);
         out.push(`<line x1="${mx}" y1="${mcbBusY}" x2="${mx}" y2="${mcbBoxY}" stroke="${mcol}" stroke-width="3"/>`);
         out.push(breakerSymbol(mx, mcbSwY, mcol));
         out.push(nodeBox(mx - NODE_W / 2, mcbBoxY, NODE_W, NODE_H, mcol, 'MCB', mb.name,
-          [`${fmtA(mb.rating_a)} A rated`, { text: `${fmtA(mb.current)} A`, color: mcol, bold: true }, `${mb.circuit_count} ccts${mb.maintenance_circuits ? ' · ⚠' + mb.maintenance_circuits : ''}`], mb.pct, 'mcb-' + mb.id));
+          [`${fmtA(mb.rating_a)} A rated`, { text: `${fmtA(mb.current)} A`, color: mcol, bold: true },
+            `${mb.circuit_count} cct${mb.circuit_count === 1 ? '' : 's'}${mb.maintenance_circuits ? ' · ⚠' + mb.maintenance_circuits : ''}`],
+          mb.pct, 'mcb-' + mb.id, [
+            edit ? { icon: 'edit', action: 'edit-mcb', id: mb.id, title: 'Edit ' + mb.name } : null,
+            manage ? { icon: 'del', action: 'delete-mcb', id: mb.id, title: 'Delete ' + mb.name } : null,
+          ]));
       });
+      // The "add MCB" control sits on the drop feeding this MCCB's sub-bus.
+      if (edit) out.push(sldPill(cx, addMcbY, 74, '+ MCB', `data-action="add-mcb" data-id="${m.id}"`, col, 'Add an MCB under ' + m.name));
     });
     return wrap(W, H, out.join(''));
 
@@ -564,7 +621,7 @@
     function breakerSymbol(cx, cy, col) {
       return `<g transform="translate(${cx - 12} ${cy - 12})"><rect width="24" height="24" rx="4" fill="#fff" stroke="${col}" stroke-width="2.5"/><line x1="5" y1="19" x2="19" y2="5" stroke="${col}" stroke-width="2.5" stroke-linecap="round"/></g>`;
     }
-    function nodeBox(x, y, w, h, col, kind, title, lines, pct, focusId) {
+    function nodeBox(x, y, w, h, col, kind, title, lines, pct, focusId, actions) {
       const pad = 16;
       let ty = y + 22;
       let t = `<text x="${x + pad}" y="${ty}" font-size="11" fill="#94a3b8" letter-spacing="1.5">${esc(kind)}</text>`;
@@ -573,11 +630,16 @@
       lines.forEach(l => {
         ty += 22;
         const o = typeof l === 'string' ? { text: l } : l;
-        t += `<text x="${x + pad}" y="${ty}" font-size="14" font-weight="${o.bold ? 700 : 400}" fill="${o.color || '#475569'}">${esc(o.text)}</text>`;
+        t += `<text x="${x + pad}" y="${ty}" font-size="13" font-weight="${o.bold ? 700 : 400}" fill="${o.color || '#475569'}">${esc(o.text)}</text>`;
       });
       const bw = w - pad * 2, by = y + h - 14;
       t += `<rect x="${x + pad}" y="${by}" width="${bw}" height="6" rx="3" fill="#e5eaf0"/><rect x="${x + pad}" y="${by}" width="${bw * Math.min(100, pct) / 100}" height="6" rx="3" fill="${col}"/>`;
-      return `<a href="${boardHash('dashboard', b.id, 'focus=' + focusId)}" class="sld-node"><rect class="box" x="${x}" y="${y}" width="${w}" height="${h}" rx="10" fill="#f7fbfd" stroke="${col}" stroke-width="2.5"/>${t}</a>`;
+      const btns = (actions || []).filter(Boolean);
+      let bx = x + w - 12 - btns.length * 26 - (btns.length - 1) * 6;
+      btns.forEach(a => { t += sldIconBtn(bx, y + 11, a.icon, a.action, a.id, a.title, col); bx += 32; });
+      return `<g id="${focusId}" class="sld-node" data-action="open-node" data-focus="${focusId}">` +
+        `<title>${esc(title)} - click to open on the dashboard</title>` +
+        `<rect class="box" x="${x}" y="${y}" width="${w}" height="${h}" rx="10" fill="#f7fbfd" stroke="${col}" stroke-width="2.5"/>${t}</g>`;
     }
   }
 
@@ -731,15 +793,36 @@
     const isEdit = !!(item && item.id);
     const path = kind === 'mccb' ? '/api/mccbs' : '/api/mcbs';
     const label = kind.toUpperCase();
-    formModal(isEdit ? `Edit ${item.name}` : `Add ${label}`, `
+    const board = state.board;
+    const parent = kind === 'mcb' ? findMCCB(isEdit ? item.mccb_id : Number(parentId)) : null;
+    // An MCB can be moved to another MCCB on the same board, so its parent is
+    // always a field; an MCCB always belongs to the board being viewed.
+    const parentField = kind === 'mcb'
+      ? field('Fed from MCCB', 'mccb_id', parent ? parent.id : (board.mccbs[0] || {}).id, {
+        type: 'select', required: true, full: true,
+        options: board.mccbs.map(m => ({ value: m.id, label: `${m.name} - ${fmtA(m.rating_a)} A rated, ${fmtA(m.current)} A used` })),
+        hint: isEdit ? 'Change this to move the MCB to a different MCCB.' : '',
+      })
+      : '';
+    const title = isEdit ? 'Edit ' + item.name
+      : (kind === 'mccb' ? 'Add MCCB to ' + board.code : 'Add MCB' + (parent ? ' under ' + parent.name : ''));
+    formModal(title, `
+      ${parentField}
       ${field(label + ' name', 'name', isEdit ? item.name : suggestBreakerName(kind, parentId), { required: true, placeholder: kind === 'mccb' ? 'MCCB-C' : 'MCB-05' })}
-      ${field('Rating (A)', 'rating_a', isEdit ? item.rating_a : (kind === 'mccb' ? 100 : 32), { type: 'number', required: true, attrs: 'min="1" max="10000" step="any" list="ratings"' })}
+      ${field('Rating (A)', 'rating_a', isEdit ? item.rating_a : (kind === 'mccb' ? 100 : 32), { type: 'number', required: true, attrs: 'min="1" max="10000" step="any" list="ratings"', hint: 'Capacity shown on the diagram = rating × ' + (state.overview ? state.overview.settings.trip_factor : 1.14) })}
       <datalist id="ratings">${RATINGS.map(r => `<option value="${r}">`).join('')}</datalist>`,
       async d => {
         const body = { name: d.name, rating_a: Number(d.rating_a) };
-        if (kind === 'mccb') body.board_id = state.board.id; else body.mccb_id = Number(parentId);
-        if (isEdit) { await api('PUT', path + '/' + item.id, { name: body.name, rating_a: body.rating_a }); await afterChange(label + ' updated'); }
-        else { await api('POST', path, body); await afterChange(label + ' added'); }
+        if (kind === 'mccb') body.board_id = board.id; else body.mccb_id = Number(d.mccb_id);
+        if (isEdit) {
+          await api('PUT', path + '/' + item.id, kind === 'mccb' ? { name: body.name, rating_a: body.rating_a } : { name: body.name, rating_a: body.rating_a, mccb_id: body.mccb_id });
+          state.focus = kind + '-' + item.id;
+          await afterChange(label + ' updated');
+        } else {
+          const r = await api('POST', path, body);
+          state.focus = kind + '-' + r.id;
+          await afterChange(label + ' added');
+        }
       },
       isEdit && canManage() ? { deleteLabel: 'Delete ' + label, onDelete: () => deleteBreaker(kind, item) } : {});
   }
@@ -787,7 +870,7 @@
       async d => {
         const body = { mcb_id: Number(d.mcb_id), name: d.name, code: d.code, load_a: Number(d.load_a), status: d.status, equipment_count: Number(d.equipment_count || 0), service: d.service, notes: d.notes };
         if (isEdit) { await api('PUT', '/api/circuits/' + c.id, body); await afterChange('Circuit updated'); }
-        else { const r = await api('POST', '/api/circuits', body); await afterChange('Circuit ' + r.code + ' added'); }
+        else { const r = await api('POST', '/api/circuits', body); state.focus = 'circuit-' + r.id; await afterChange('Circuit ' + r.code + ' added'); }
       },
       isEdit && canManage() ? { deleteLabel: 'Delete circuit', onDelete: () => deleteCircuit(c) } : {});
     if (!isEdit) {
@@ -933,6 +1016,7 @@
         break;
       }
       case 'open-board': navigate(boardHash('dashboard', id)); break;
+      case 'open-node': navigate(boardHash('dashboard', state.boardId, 'focus=' + el.dataset.focus)); break;
       case 'sld-board': navigate(boardHash('sld', id)); break;
       case 'toggle-mccb': {
         const key = 'mccb-' + id, sec = document.getElementById(key);

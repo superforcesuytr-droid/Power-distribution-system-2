@@ -295,7 +295,19 @@ table.grid td.bar-cell .bar { width: 90px; display: inline-block; vertical-align
 }
 .sld-canvas svg { display: block; margin: 0 auto; max-width: 100%; height: auto; font-family: var(--mono); }
 .sld-node { cursor: pointer; }
-.sld-node:hover rect.box { filter: brightness(.97); }
+.sld-node:hover rect.box { fill: #eef6fc; }
+.sld-btn, .sld-pill { cursor: pointer; }
+.sld-btn:hover rect { fill: var(--primary-soft); }
+.sld-pill rect { transition: fill .12s; }
+.sld-pill:hover rect { fill: var(--primary-soft); }
+.sld-node.flash rect.box { animation: sldflash 1.7s ease-out; }
+@keyframes sldflash {
+  0% { stroke-width: 9; fill: #fff6da; }
+  60% { stroke-width: 4; }
+  100% { stroke-width: 2.5; fill: #f7fbfd; }
+}
+.sld-hint { margin: 0 0 12px; font-size: 13px; color: var(--muted); background: var(--primary-soft); border-radius: 8px; padding: 9px 14px; }
+.sld-hint b { color: var(--primary-dark); }
 
 /* ------------------------------------------------------------------ activity */
 .activity-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
