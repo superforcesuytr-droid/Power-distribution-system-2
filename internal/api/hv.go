@@ -23,10 +23,12 @@ func (s *Server) routesHV(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/hv/feeders/{id}", s.requireRole(model.RoleSupervisor, s.handleHVFeederUpdate))
 	mux.HandleFunc("DELETE /api/hv/feeders/{id}", s.requireRole(model.RoleSupervisor, s.handleHVFeederDelete))
 	mux.HandleFunc("POST /api/hv/feeders/{id}/move", s.requireRole(model.RoleSupervisor, s.handleHVFeederMove))
+	mux.HandleFunc("POST /api/hv/feeders/{id}/place", s.requireRole(model.RoleSupervisor, s.handleHVFeederPlace))
 
 	mux.HandleFunc("POST /api/hv/ways", s.requireRole(model.RoleTechnician, s.handleHVWayCreate))
 	mux.HandleFunc("PUT /api/hv/ways/{id}", s.requireRole(model.RoleTechnician, s.handleHVWayUpdate))
 	mux.HandleFunc("DELETE /api/hv/ways/{id}", s.requireRole(model.RoleSupervisor, s.handleHVWayDelete))
+	mux.HandleFunc("POST /api/hv/ways/{id}/place", s.requireRole(model.RoleTechnician, s.handleHVWayPlace))
 
 	mux.HandleFunc("POST /api/hv/devices", s.requireRole(model.RoleTechnician, s.handleHVDeviceCreate))
 	mux.HandleFunc("PUT /api/hv/devices/{id}", s.requireRole(model.RoleTechnician, s.handleHVDeviceUpdate))
@@ -189,6 +191,31 @@ func (s *Server) handleHVFeederMove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Store.MoveHVFeeder(ctx(r), roleOf(r), id, in.Delta); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+// hvPlaceInput is where a dragged column was dropped: the bus section it landed
+// on and how many of that section's columns now sit to its left.
+type hvPlaceInput struct {
+	SectionID int64 `json:"section_id"`
+	Index     int   `json:"index"`
+}
+
+func (s *Server) handleHVFeederPlace(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	var in hvPlaceInput
+	if err := decode(r, &in); err != nil {
+		fail(w, err)
+		return
+	}
+	if err := s.Store.PlaceHVFeeder(ctx(r), roleOf(r), id, in.SectionID, in.Index); err != nil {
 		fail(w, err)
 		return
 	}
@@ -388,6 +415,24 @@ func (s *Server) handleHVCouplerDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Store.DeleteHVCoupler(ctx(r), roleOf(r), id); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+func (s *Server) handleHVWayPlace(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	var in hvPlaceInput
+	if err := decode(r, &in); err != nil {
+		fail(w, err)
+		return
+	}
+	if err := s.Store.PlaceHVWay(ctx(r), roleOf(r), id, in.SectionID, in.Index); err != nil {
 		fail(w, err)
 		return
 	}

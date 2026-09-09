@@ -576,10 +576,11 @@
       canvas.scrollTop = py * k - oy;
     }, { passive: false });
 
-    // Drag the background to pan. Anything clickable keeps its click.
+    // Drag the background to pan. Anything clickable, and anything that can be
+    // picked up and moved, keeps the pointer for itself.
     let from = null;
     canvas.addEventListener('pointerdown', e => {
-      if (e.button !== 0 || e.target.closest('[data-action]')) return;
+      if (e.button !== 0 || e.target.closest('[data-action], [data-drag]')) return;
       from = { x: e.clientX, y: e.clientY, l: canvas.scrollLeft, t: canvas.scrollTop };
       canvas.classList.add('grabbing');
       canvas.setPointerCapture(e.pointerId);
@@ -809,7 +810,7 @@
             <div><div class="n">${net.linked_count}</div><div class="l">Linked</div></div>
           </div>
         </div>
-        ${canEdit() ? `<p class="sld-hint">Click any destination box to jump to that board. <b>+ Way</b> adds an outgoing way to a bus section, which every feeder on that section backs. On a way, the <b>+</b> beside a device fits another one below it, and clicking a device changes, reorders or removes it.</p>` : ''}
+        ${canEdit() ? `<p class="sld-hint">Click any destination box to jump to that board. <b>+ Way</b> adds an outgoing way to a bus section, which every feeder on that section backs. On a way, the <b>+</b> beside a device fits another one below it, and clicking a device changes, reorders or removes it. Drag a way, a feeder or a device to move it.</p>` : ''}
         <div class="hv-toolbar">
           ${canManage() ? '<button class="btn btn-primary" data-action="hv-add-section">+ Add bus section</button>' : ''}
           ${canManage() && net.sections.length > 1 ? '<button class="btn" data-action="hv-add-coupler">+ Add coupler</button>' : ''}
@@ -817,7 +818,7 @@
         ${net.sections.length && canEdit() ? `<div class="palette">
           <span class="palette-label">DRAG ON:</span>
           ${Object.entries(DEVICE_LABEL).map(([k, l]) => `<span class="palette-chip" data-kind="${k}">${esc(l)}</span>`).join('')}
-          <span class="palette-hint">Drop one onto a way, or drag a device already on the diagram to move it.</span>
+          <span class="palette-hint">Drop one onto a way. Drag a device to move it along its conductor, or drag a whole way or feeder left or right to reorder it.</span>
         </div>` : ''}
         ${net.sections.length ? zoomBar() : ''}
         <div class="sld-canvas" id="diagram-canvas">${net.sections.length ? hvSVG(net) : '<div class="empty"><h2>Nothing on the busbar yet</h2><p>Add a bus section, then the feeders backing it and the ways tapping it.</p></div>'}</div>
@@ -853,6 +854,30 @@
       if (!p) return null;
       return hvDrops.find(z => p.x >= z.x && p.x <= z.x + z.w && p.y >= z.y && p.y <= z.y + z.h) || null;
     };
+    // Where a whole column would land. The nearest section is taken rather than
+    // only the one under the pointer, so a column can be dragged into the gap
+    // at either end of a bar without having to hit it exactly.
+    const slotAt = (cx, cy, kind) => {
+      const p = toSvg(cx, cy);
+      if (!p || !hvLayout) return null;
+      const band = hvLayout[kind];
+      if (p.y < band.top || p.y > band.bottom) return null;
+      let best = null, bestGap = Infinity;
+      hvLayout.sections.forEach(sec => {
+        const gap = p.x < sec.left ? sec.left - p.x
+          : (p.x > sec.left + sec.width ? p.x - sec.left - sec.width : 0);
+        if (gap < bestGap) { bestGap = gap; best = sec; }
+      });
+      if (!best || bestGap > 110) return null;
+      const ids = kind === 'way' ? best.wayIds : best.feederIds;
+      const left = kind === 'way' ? best.wayLeft : best.feederLeft;
+      const index = Math.max(0, Math.min(ids.length, ids.length ? Math.round((p.x - left) / band.pitch) : 0));
+      return {
+        sectionId: best.id, index, ids, name: best.name,
+        x: left + index * band.pitch - band.gap / 2 - 3, y: band.top,
+        w: 6, h: band.bottom - band.top,
+      };
+    };
 
     let drag = null, press = null;
 
@@ -870,7 +895,7 @@
       if (!drag) return;
       drag.ghost.style.left = e.clientX + 14 + 'px';
       drag.ghost.style.top = e.clientY + 14 + 'px';
-      const z = zoneAt(e.clientX, e.clientY);
+      const z = drag.column ? slotAt(e.clientX, e.clientY, drag.column) : zoneAt(e.clientX, e.clientY);
       drag.zone = z;
       if (z) {
         hint.setAttribute('x', z.x); hint.setAttribute('y', z.y);
@@ -879,6 +904,7 @@
       } else {
         hint.style.display = 'none';
       }
+      hint.classList.toggle('bar', !!drag.column);
       drag.ghost.classList.toggle('over', !!z);
     }
     async function finish() {
@@ -891,6 +917,18 @@
       hvDragEndedAt = Date.now();
       if (!d.zone) return;
       try {
+        if (d.column) {
+          // The slot counts the columns as drawn, so a column moving right
+          // within its own section passes over its own place on the way.
+          const at = d.zone.ids.indexOf(d.id);
+          let index = d.zone.index;
+          if (at >= 0 && index > at) index -= 1;
+          if (at === index) return;
+          await api('POST', `/api/hv/${d.column === 'way' ? 'ways' : 'feeders'}/${d.id}/place`,
+            { section_id: d.zone.sectionId, index });
+          await afterChange(d.label + ' moved');
+          return;
+        }
         const on = { way_id: d.zone.wayId || 0, feeder_id: d.zone.feederId || 0, after_id: d.zone.afterId };
         if (d.mode === 'new') {
           await api('POST', '/api/hv/devices', { ...on, kind: d.kind, name: '' });
@@ -916,21 +954,32 @@
       chip.addEventListener('pointerup', onUp);
     }));
 
-    // A device on the diagram: a small movement is a click to edit it, a larger
-    // one picks it up.
+    // Something on the diagram: a small movement is a click to open it, a
+    // larger one picks it up. A device moves along its own conductor; a way or
+    // a feeder moves as a whole column along the bar.
     svg.addEventListener('pointerdown', e => {
-      if (e.target.closest('.sld-btn, .sld-pill')) return;
-      const g = e.target.closest('g.hv-node[data-action=hv-edit-device]');
-      if (!g || e.button !== 0) return;
+      if (e.target.closest('.sld-btn, .sld-pill') || e.button !== 0) return;
       // Deliberately no pointer capture yet: capturing here would retarget the
-      // click that follows, and a press on a device is a click until it moves.
+      // click that follows, and a press is a click until it moves.
+      const col = e.target.closest('[data-drag]');
+      if (col) {
+        press = { column: col.dataset.drag, id: Number(col.dataset.dragId), label: col.dataset.dragLabel || 'Column',
+          x: e.clientX, y: e.clientY, pointerId: e.pointerId };
+        return;
+      }
+      const g = e.target.closest('g.hv-node[data-action=hv-edit-device]');
+      if (!g) return;
       press = { id: Number(g.dataset.id), x: e.clientX, y: e.clientY, pointerId: e.pointerId,
         label: (g.querySelector('title') || {}).textContent || 'Device' };
     });
     svg.addEventListener('pointermove', e => {
       if (drag) { move(e); return; }
       if (press && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 6) {
-        begin({ mode: 'move', deviceId: press.id, label: press.label.split(' - ')[0] }, e);
+        if (press.column) {
+          begin({ mode: 'column', column: press.column, id: press.id, label: press.label }, e);
+        } else {
+          begin({ mode: 'move', deviceId: press.id, label: press.label.split(' - ')[0] }, e);
+        }
         try { svg.setPointerCapture(press.pointerId); } catch (_) { /* already gone */ }
         press = null;
       }
@@ -941,6 +990,10 @@
   // Where a dragged item may be dropped, in diagram coordinates, gathered while
   // the drawing is built so the two can never disagree.
   let hvDrops = [];
+
+  // The bands a whole column may be dragged along, and the order the columns
+  // are currently in, so a drop can be turned into a position.
+  let hvLayout = null;
 
   function hvSVG(net) {
     hvDrops = [];
@@ -990,6 +1043,23 @@
     const destY = wayTapY + DEV_GAP + chain + 46;
     const H = destY + DEST_H + MARGIN;
 
+    // Where a whole column may be dropped when one is dragged along the bar.
+    // The bands are wide enough that anywhere on the column counts.
+    hvLayout = {
+      way: { top: busY + 6, bottom: destY + DEST_H + 12, pitch: WAY_W + WAY_GAP, gap: WAY_GAP },
+      feeder: { top: feederY - 28, bottom: busY - 8, pitch: FEEDER_W, gap: 0 },
+      sections: secs.map(g => {
+        const nw = g.sec.ways.length, nf = g.sec.feeders.length;
+        return {
+          id: g.sec.id, name: g.sec.name, left: g.left, width: g.width,
+          wayLeft: g.cx - (nw * WAY_W + Math.max(0, nw - 1) * WAY_GAP) / 2,
+          wayIds: g.sec.ways.map(w => w.id),
+          feederLeft: g.cx - nf * FEEDER_W / 2,
+          feederIds: g.sec.feeders.map(f => f.id),
+        };
+      }),
+    };
+
     const out = [];
 
     secs.forEach(g => {
@@ -1005,8 +1075,13 @@
       const fLeft = g.cx - fSpan / 2;
       sec.feeders.forEach((f, i) => {
         const cx = fLeft + i * FEEDER_W + FEEDER_W / 2;
-        out.push(`<text x="${cx}" y="${feederY}" text-anchor="middle" font-size="19" font-weight="700" fill="${C.label}">${esc(f.name)}</text>`);
-        out.push(`<text x="${cx}" y="${feederY + 18}" text-anchor="middle" font-size="12" font-weight="600" fill="${C.muted}" letter-spacing=".8">${esc(f.voltage)}${f.source ? ' · ' + esc(f.source).toUpperCase() : ''}</text>`);
+        const fGrab = canManage() ? ` class="hv-grab" data-drag="feeder" data-drag-id="${f.id}" data-drag-label="${esc(f.name)}"` : '';
+        out.push(`<g${fGrab}>
+          <title>${esc(f.name)}${canManage() ? ' - drag left or right to move this feeder along the busbar' : ''}</title>
+          <rect x="${cx - FEEDER_W / 2 + 10}" y="${feederY - 22}" width="${FEEDER_W - 20}" height="46" rx="9" fill="transparent"/>
+          <text x="${cx}" y="${feederY}" text-anchor="middle" font-size="19" font-weight="700" fill="${C.label}">${esc(f.name)}</text>
+          <text x="${cx}" y="${feederY + 18}" text-anchor="middle" font-size="12" font-weight="600" fill="${C.muted}" letter-spacing=".8">${esc(f.voltage)}${f.source ? ' · ' + esc(f.source).toUpperCase() : ''}</text>
+        </g>`);
         out.push(`<line x1="${cx}" y1="${feederY + 28}" x2="${cx}" y2="${busY}" stroke="${C.bus}" stroke-width="3"/>`);
         out.push(`<circle cx="${cx}" cy="${busY}" r="5" fill="${C.bus}"/>`);
 
@@ -1060,6 +1135,14 @@
       const wLeft = g.cx - wSpan / 2;
       sec.ways.forEach((way, i) => {
         const wx = wLeft + i * (WAY_W + WAY_GAP) + WAY_W / 2;
+        // A strip behind the whole column, so it can be picked up anywhere the
+        // devices and buttons on it leave clear.
+        if (canEdit()) {
+          out.push(`<g class="hv-grab" data-drag="way" data-drag-id="${way.id}" data-drag-label="${esc(way.name)}">
+            <title>${esc(way.name)} - drag left or right to move this way along the bar</title>
+            <rect x="${wx - WAY_W / 2 + 6}" y="${busY + 8}" width="${WAY_W - 12}" height="${destY + DEST_H - busY - 8}" rx="10" fill="transparent"/>
+          </g>`);
+        }
         out.push(`<circle cx="${wx}" cy="${busY}" r="4.5" fill="${C.bus}"/>`);
         out.push(`<line x1="${wx}" y1="${busY}" x2="${wx}" y2="${destY}" stroke="${C.line}" stroke-width="2.5"/>`);
 
@@ -1097,7 +1180,8 @@
             : (way.dest_label ? 'External' : 'Set a destination'));
         const destAct = linked ? `data-action="hv-open-dest" data-id="${way.dest_board_id}"`
           : (canEdit() ? `data-action="hv-edit-way" data-id="${way.id}"` : '');
-        out.push(`<g class="${destAct ? 'hv-node ' : ''}${linked ? 'hv-linked' : ''}" id="hv-way-${way.id}" ${destAct}>
+        const destGrab = canEdit() ? ` data-drag="way" data-drag-id="${way.id}" data-drag-label="${esc(way.name)}"` : '';
+        out.push(`<g class="${destAct ? 'hv-node ' : ''}${linked ? 'hv-linked' : ''}" id="hv-way-${way.id}" ${destAct}${destGrab}>
           <title>${esc(label)}${way.dest_detail ? ' · ' + esc(way.dest_detail) : ''}${linked ? ' - click to open this board' : (destAct ? ' - click to set where this way feeds' : '')}</title>
           <rect x="${wx - WAY_W / 2 + 6}" y="${destY}" width="${WAY_W - 12}" height="${DEST_H}" rx="9"
                 fill="${linked ? '#f2fbf6' : '#f8fafc'}" stroke="${dcol}" stroke-width="2.5"/>

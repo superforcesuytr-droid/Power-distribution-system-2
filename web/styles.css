@@ -331,6 +331,9 @@ table.grid td.bar-cell .bar { width: 90px; display: inline-block; vertical-align
 .drag-ghost.over { background: var(--primary); }
 .sld-canvas.dropping { cursor: grabbing; }
 rect.drop-hint { fill: rgba(11,116,196,.14); stroke: var(--primary); stroke-width: 2; stroke-dasharray: 5 4; }
+rect.drop-hint.bar { fill: var(--primary); fill-opacity: .9; stroke: none; }
+.hv-grab { cursor: grab; }
+.sld-canvas.dropping .hv-grab { cursor: grabbing; }
 
 .zoom-bar { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }
 .zoom-bar .btn { min-width: 34px; justify-content: center; font-weight: 700; }

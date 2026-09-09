@@ -165,7 +165,8 @@ func (s *Store) HVNetwork(ctx context.Context) (*model.HVNetwork, error) {
 		return nil, err
 	}
 
-	// Same reading order as everywhere else: F2 before F10, W2 before W10.
+	// Feeders and ways read left to right in the order they are arranged on the
+	// bar, falling back to the same natural name order used everywhere else.
 	for i := range n.Sections {
 		sec := &n.Sections[i]
 		sort.SliceStable(sec.Feeders, func(a, b int) bool {
@@ -174,7 +175,12 @@ func (s *Store) HVNetwork(ctx context.Context) (*model.HVNetwork, error) {
 			}
 			return model.NaturalLess(sec.Feeders[a].Name, sec.Feeders[b].Name)
 		})
-		sort.SliceStable(sec.Ways, func(a, b int) bool { return model.NaturalLess(sec.Ways[a].Name, sec.Ways[b].Name) })
+		sort.SliceStable(sec.Ways, func(a, b int) bool {
+			if sec.Ways[a].Position != sec.Ways[b].Position {
+				return sec.Ways[a].Position < sec.Ways[b].Position
+			}
+			return model.NaturalLess(sec.Ways[a].Name, sec.Ways[b].Name)
+		})
 		for j := range sec.Feeders {
 			d := sec.Feeders[j].Devices
 			sort.SliceStable(d, func(a, b int) bool { return d[a].Position < d[b].Position })
@@ -357,6 +363,111 @@ func (s *Store) MoveHVFeeder(ctx context.Context, role string, id int64, delta i
 	})
 }
 
+// PlaceHVFeeder moves an incoming feeder to a position on a bus section, which
+// may be a different section from the one backing it now. Feeder positions run
+// across the whole network, so the whole run is renumbered section by section
+// to keep the drawing and the stored order the same.
+func (s *Store) PlaceHVFeeder(ctx context.Context, role string, id, sectionID int64, index int) error {
+	return s.withTx(ctx, func(tx pgx.Tx) error {
+		var networkID, from int64
+		var name string
+		if err := tx.QueryRow(ctx, `SELECT network_id, section_id, name FROM hv_feeders WHERE id = $1`, id).
+			Scan(&networkID, &from, &name); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
+		}
+		to := sectionID
+		if to == 0 {
+			to = from
+		}
+		var secName string
+		if err := tx.QueryRow(ctx, `SELECT name FROM hv_sections WHERE id = $1 AND network_id = $2`,
+			to, networkID).Scan(&secName); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return &UserError{"That bus section is not on this network."}
+			}
+			return err
+		}
+
+		order, err := sectionOrder(ctx, tx, networkID)
+		if err != nil {
+			return err
+		}
+		held := map[int64][]int64{}
+		rows, err := tx.Query(ctx, `SELECT f.id, f.section_id FROM hv_feeders f
+			JOIN hv_sections s ON s.id = f.section_id
+			WHERE f.network_id = $1 AND f.id <> $2
+			ORDER BY s.position, s.id, f.position, f.name`, networkID, id)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var fid, sid int64
+			if err := rows.Scan(&fid, &sid); err != nil {
+				rows.Close()
+				return err
+			}
+			held[sid] = append(held[sid], fid)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+
+		pos := 0
+		for _, sid := range order {
+			run := held[sid]
+			if sid == to {
+				run = insertAt(run, id, index)
+			}
+			for _, fid := range run {
+				section := sid
+				if _, err := tx.Exec(ctx, `UPDATE hv_feeders SET section_id = $2, position = $3, updated_at = now()
+					WHERE id = $1`, fid, section, pos); err != nil {
+					return err
+				}
+				pos++
+			}
+		}
+		return s.audit(ctx, tx, role, "update", "hv_feeder", id, "Moved feeder "+name+" to "+secName)
+	})
+}
+
+// sectionOrder lists a network's bus sections left to right.
+func sectionOrder(ctx context.Context, tx pgx.Tx, networkID int64) ([]int64, error) {
+	rows, err := tx.Query(ctx, `SELECT id FROM hv_sections WHERE network_id = $1 ORDER BY position, id`, networkID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// insertAt puts id into run at index, clamping an index off either end.
+func insertAt(run []int64, id int64, index int) []int64 {
+	if index < 0 {
+		index = 0
+	}
+	if index > len(run) {
+		index = len(run)
+	}
+	out := make([]int64, 0, len(run)+1)
+	out = append(out, run[:index]...)
+	out = append(out, id)
+	out = append(out, run[index:]...)
+	return out
+}
+
 // Ways --------------------------------------------------------------------
 
 func (s *Store) CreateHVWay(ctx context.Context, role string, w model.HVWay, networkID int64) (int64, error) {
@@ -412,6 +523,77 @@ func (s *Store) DeleteHVWay(ctx context.Context, role string, id int64) error {
 		}
 		return s.audit(ctx, tx, role, "delete", "hv_way", id, "Deleted way "+name)
 	})
+}
+
+// PlaceHVWay moves an outgoing way to a position along a bus section, which may
+// be a different section from the one it taps now.
+func (s *Store) PlaceHVWay(ctx context.Context, role string, id, sectionID int64, index int) error {
+	return s.withTx(ctx, func(tx pgx.Tx) error {
+		var networkID, from int64
+		var name string
+		if err := tx.QueryRow(ctx, `SELECT s.network_id, w.section_id, w.name FROM hv_ways w
+			JOIN hv_sections s ON s.id = w.section_id WHERE w.id = $1`, id).
+			Scan(&networkID, &from, &name); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
+		}
+		to := sectionID
+		if to == 0 {
+			to = from
+		}
+		var secName string
+		if err := tx.QueryRow(ctx, `SELECT name FROM hv_sections WHERE id = $1 AND network_id = $2`,
+			to, networkID).Scan(&secName); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return &UserError{"That bus section is not on this network."}
+			}
+			return err
+		}
+
+		run, err := wayOrder(ctx, tx, to, id)
+		if err != nil {
+			return err
+		}
+		for i, wid := range insertAt(run, id, index) {
+			if _, err := tx.Exec(ctx, `UPDATE hv_ways SET section_id = $2, position = $3, updated_at = now()
+				WHERE id = $1`, wid, to, i); err != nil {
+				return err
+			}
+		}
+		if to != from {
+			left, err := wayOrder(ctx, tx, from, 0)
+			if err != nil {
+				return err
+			}
+			for i, wid := range left {
+				if _, err := tx.Exec(ctx, `UPDATE hv_ways SET position = $2 WHERE id = $1`, wid, i); err != nil {
+					return err
+				}
+			}
+		}
+		return s.audit(ctx, tx, role, "update", "hv_way", id, "Moved way "+name+" to "+secName)
+	})
+}
+
+// wayOrder lists the ways on a bus section left to right, skipping one.
+func wayOrder(ctx context.Context, tx pgx.Tx, sectionID, skip int64) ([]int64, error) {
+	rows, err := tx.Query(ctx, `SELECT id FROM hv_ways WHERE section_id = $1 AND id <> $2
+		ORDER BY position, name`, sectionID, skip)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 // Couplers ----------------------------------------------------------------
