@@ -311,6 +311,12 @@ table.grid td.bar-cell .bar { width: 90px; display: inline-block; vertical-align
   border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; overflow: auto;
 }
 .sld-canvas svg { display: block; margin: 0 auto; max-width: 100%; height: auto; font-family: var(--mono); }
+.sld-canvas { cursor: grab; }
+.sld-canvas.grabbing { cursor: grabbing; user-select: none; }
+.zoom-bar { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }
+.zoom-bar .btn { min-width: 34px; justify-content: center; font-weight: 700; }
+.zoom-label { font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--muted); min-width: 52px; text-align: center; }
+.zoom-hint { font-size: 11px; color: var(--faint); margin-left: 10px; }
 .sld-node { cursor: pointer; }
 .sld-node:hover rect.box { fill: #eef6fc; }
 .sld-btn, .sld-pill { cursor: pointer; }

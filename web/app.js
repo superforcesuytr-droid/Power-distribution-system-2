@@ -513,6 +513,88 @@
     }, 250));
   }
 
+  // ------------------------------------------------------------ diagram zoom
+  // Both diagrams are one SVG with a viewBox, so scaling is a matter of the
+  // width it is rendered at; the canvas around it scrolls. That keeps text
+  // crisp at any zoom, which a bitmap scale would not.
+  const ZOOM_MIN = 0.25, ZOOM_MAX = 3;
+
+  function zoomBar() {
+    return `<div class="zoom-bar">
+      <button class="btn btn-sm" data-zoom="out" title="Zoom out" aria-label="Zoom out">−</button>
+      <span class="zoom-label" id="zoom-label">100%</span>
+      <button class="btn btn-sm" data-zoom="in" title="Zoom in" aria-label="Zoom in">+</button>
+      <button class="btn btn-sm" data-zoom="fit" title="Fit the whole diagram in view">Fit</button>
+      <button class="btn btn-sm" data-zoom="reset" title="Actual size">1:1</button>
+      <span class="zoom-hint">Ctrl or ⌘ and scroll to zoom · drag to pan</span>
+    </div>`;
+  }
+
+  function mountZoom(key) {
+    const canvas = $('#diagram-canvas'), svg = canvas && $('svg', canvas);
+    if (!svg) return;
+    const baseW = (svg.viewBox && svg.viewBox.baseVal && svg.viewBox.baseVal.width) || svg.getBoundingClientRect().width;
+    if (!baseW) return;
+    const store = 'pds.zoom.' + key;
+    let zoom = 1;
+
+    const apply = z => {
+      zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
+      svg.style.maxWidth = 'none';
+      svg.style.width = (baseW * zoom) + 'px';
+      const label = $('#zoom-label', canvas.parentNode);
+      if (label) label.textContent = Math.round(zoom * 100) + '%';
+      try { localStorage.setItem(store, String(zoom)); } catch (_) { /* private window */ }
+    };
+    // Fit never enlarges: a diagram narrower than the canvas stays at full size.
+    const fitZoom = () => Math.min(1, Math.max(ZOOM_MIN, (canvas.clientWidth - 48) / baseW));
+
+    let saved = 0;
+    try { saved = Number(localStorage.getItem(store)) || 0; } catch (_) { /* ignore */ }
+    apply(saved || fitZoom());
+
+    $$('[data-zoom]', canvas.parentNode).forEach(btn => btn.addEventListener('click', () => {
+      const what = btn.dataset.zoom;
+      if (what === 'in') apply(zoom * 1.25);
+      else if (what === 'out') apply(zoom / 1.25);
+      else if (what === 'fit') apply(fitZoom());
+      else apply(1);
+    }));
+
+    // Ctrl or Cmd with the wheel zooms about the pointer, so what you are
+    // looking at stays under it. A plain wheel keeps scrolling the canvas.
+    canvas.addEventListener('wheel', e => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const ox = e.clientX - rect.left, oy = e.clientY - rect.top;
+      const px = ox + canvas.scrollLeft, py = oy + canvas.scrollTop;
+      const before = zoom;
+      apply(zoom * (e.deltaY < 0 ? 1.12 : 1 / 1.12));
+      const k = zoom / before;
+      canvas.scrollLeft = px * k - ox;
+      canvas.scrollTop = py * k - oy;
+    }, { passive: false });
+
+    // Drag the background to pan. Anything clickable keeps its click.
+    let from = null;
+    canvas.addEventListener('pointerdown', e => {
+      if (e.button !== 0 || e.target.closest('[data-action]')) return;
+      from = { x: e.clientX, y: e.clientY, l: canvas.scrollLeft, t: canvas.scrollTop };
+      canvas.classList.add('grabbing');
+      canvas.setPointerCapture(e.pointerId);
+    });
+    canvas.addEventListener('pointermove', e => {
+      if (!from) return;
+      canvas.scrollLeft = from.l - (e.clientX - from.x);
+      canvas.scrollTop = from.t - (e.clientY - from.y);
+    });
+    ['pointerup', 'pointercancel'].forEach(t => canvas.addEventListener(t, () => {
+      from = null;
+      canvas.classList.remove('grabbing');
+    }));
+  }
+
   // ------------------------------------------------------------ single line diagram
   async function renderSLD() {
     const ov = await loadOverview();
@@ -546,8 +628,10 @@
           <span class="faint" style="margin-left:auto">Capacity = rating × ${st.trip_factor}</span>
         </div>
         ${canEdit() ? '<p class="sld-hint">Edit the diagram directly: <b>✎</b> changes a breaker\'s name or rating, <b>+ MCCB</b> and <b>+ MCB</b> add one, and the drawing redraws itself immediately. Click a breaker body to open it on the dashboard.</p>' : ''}
-        <div class="sld-canvas">${sldSVG(b)}</div>` : '<div class="empty"><h2>No board to draw</h2></div>'}
+        ${zoomBar()}
+        <div class="sld-canvas" id="diagram-canvas">${sldSVG(b)}</div>` : '<div class="empty"><h2>No board to draw</h2></div>'}
       </div>`;
+    mountZoom('sld');
     applyFocus();
   }
 
@@ -726,8 +810,10 @@
           ${canManage() ? '<button class="btn btn-primary" data-action="hv-add-feeder">+ Add feeder</button>' : ''}
           ${canManage() && net.feeders.length > 1 ? '<button class="btn" data-action="hv-add-coupler">+ Add coupler</button>' : ''}
         </div>
-        <div class="sld-canvas">${net.feeders.length ? hvSVG(net) : '<div class="empty"><h2>No feeders yet</h2><p>Add the incoming feeders to start the overview.</p></div>'}</div>
+        ${net.feeders.length ? zoomBar() : ''}
+        <div class="sld-canvas" id="diagram-canvas">${net.feeders.length ? hvSVG(net) : '<div class="empty"><h2>No feeders yet</h2><p>Add the incoming feeders to start the overview.</p></div>'}</div>
       </div>`;
+    mountZoom('hv');
     applyFocus();
   }
 

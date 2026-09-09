@@ -26,6 +26,9 @@ The single line diagram is drawn from the same data and can be edited directly:
   and the outgoing ways from each feeder's switchgear. A way can carry an RCCB,
   ELR or ELCB, pass through a transformer, and land on a destination box that
   opens the board it feeds. Everything on it is editable in place.
+- **Zoom on both diagrams** - buttons for in, out, fit and actual size, Ctrl or
+  Cmd with the scroll wheel to zoom about the pointer, and drag to pan. Each
+  diagram remembers its own zoom.
 - **Explorer** - flat, filterable table of every circuit across the site with
   CSV export.
 - **Single Line Diagram** - auto-generated SLD of any board, colour-coded by
