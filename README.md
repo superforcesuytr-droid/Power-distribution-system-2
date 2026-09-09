@@ -112,6 +112,7 @@ PowerDistributionSystem.exe [--browser] [--port 8080] [--config path\to\config.j
 | `--port N`   | listen on a fixed port (default: a free random port on 127.0.0.1) |
 | `--config`   | use a specific settings file |
 | `--headless` | serve the UI/API only, without opening a window (for testing) |
+| `--dev DIR`  | serve the UI from DIR on disk instead of the embedded copy, for development |
 
 `DATABASE_URL` (e.g. `postgres://user:pass@host:5432/dbname?sslmode=disable`)
 overrides the saved connection settings when set.
@@ -141,6 +142,52 @@ make windows
 Building on your own Mac is the smoothest route: locally built apps are not
 quarantined by Gatekeeper, so the `xattr` step above is not needed. Install Go
 with `brew install go` first.
+
+### Developing on a Mac for Windows
+
+The application is one Go codebase with no platform-specific logic outside
+`internal/window`, so almost all of the work can be done and checked on a Mac
+and only the final executable has to be produced for Windows.
+
+```sh
+brew install go postgresql@16
+brew services start postgresql@16
+
+git clone https://github.com/superforcesuytr-droid/Power-distribution-system-2.git
+cd Power-distribution-system-2
+make dev            # http://localhost:8080, UI served from web/ on disk
+```
+
+`make dev` passes `--dev web`, which serves `web/index.html`, `web/app.js` and
+`web/styles.css` from the working tree instead of the copies embedded in the
+binary. Editing the interface then needs only a browser refresh; a rebuild is
+only required for Go changes. The Settings dialog's About tab says when dev mode
+is active, so a stale build is easy to spot.
+
+When the change is ready:
+
+```sh
+make test           # go vet and the unit tests
+make windows        # dist/PowerDistributionSystem.exe, cross-compiled
+```
+
+Cross-compiling needs no Windows machine and no extra toolchain, because the
+project is pure Go with `CGO_ENABLED=0`.
+
+**What a Mac cannot check.** Only one thing differs on Windows: the window
+itself, which uses the Edge WebView2 runtime rather than the app-mode Chromium
+window used on macOS. Everything else - the interface, the calculations, the
+API, the database layer - is identical and is exercised by the Mac build. To
+cover the rest, the `windows-smoke` CI job runs the freshly built exe on a real
+`windows-latest` runner on every push and fails the build unless it starts,
+resolves its paths under `AppData`, and serves the embedded UI. Pushing a branch
+is therefore enough to prove the exe runs on Windows, and the finished binary is
+downloadable from that run's **Actions** artifacts.
+
+Running the exe on the Mac through Wine or CrossOver is possible but of limited
+use: WebView2 is unavailable there, so the app falls back to opening the
+interface in the Mac's browser, which is what the native macOS build already
+does more neatly.
 
 The output is `dist\PowerDistributionSystem.exe` (about 10 MB). Run the tests with
 `make test`. To try the app on Linux/macOS during development use

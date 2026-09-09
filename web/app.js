@@ -927,6 +927,7 @@
           <dt>Settings file</dt><dd>${esc(st.config_path)}</dd>
           <dt>Log file</dt><dd>${esc(st.log_path || '-')}</dd>
           <dt>UI address</dt><dd>${esc(location.origin)}</dd>
+          ${st.dev ? '<dt>Mode</dt><dd>dev - UI served from disk, not from the executable</dd>' : ''}
           <dt>Current role</dt><dd>${esc(state.role)}</dd>
         </dl>
         <p class="muted" style="margin-top:16px;font-size:12px">Roles: <b>Viewer</b> can only read. <b>Technician</b> can add and edit breakers and circuits. <b>Supervisor</b> can also delete, manage buildings and boards, and change these settings.</p>

@@ -37,6 +37,7 @@ func main() {
 		browser    = flag.Bool("browser", false, "open in the default browser instead of a native window")
 		headless   = flag.Bool("headless", false, "serve the API/UI without opening any window (for testing)")
 		configPath = flag.String("config", "", "path to config.json (default: next to the exe, else the user config dir)")
+		devDir     = flag.String("dev", "", "serve the UI from this directory instead of the copy embedded in the binary, so edits to web/ show on a browser refresh (use \"web\" from the repository root)")
 		showVer    = flag.Bool("version", false, "print the version and exit")
 	)
 	flag.Parse()
@@ -71,7 +72,20 @@ func main() {
 		log.Printf("no database configured yet; the setup screen will be shown")
 	}
 
-	srv := &api.Server{Store: store, Config: cfg, Static: web.FS(), Version: version, LogPath: logPath}
+	// Normal builds serve the UI from the copy embedded in the executable, so
+	// there is nothing to install alongside it. During development --dev reads
+	// web/ from disk instead, which turns a UI change into a browser refresh
+	// rather than a rebuild.
+	static := web.FS()
+	if *devDir != "" {
+		if _, err := os.Stat(filepath.Join(*devDir, "index.html")); err != nil {
+			log.Fatalf("--dev %q: no index.html there (run from the repository root and pass --dev web)", *devDir)
+		}
+		static = os.DirFS(*devDir)
+		log.Printf("dev mode: serving the UI from %s - edit and refresh, no rebuild needed", *devDir)
+	}
+
+	srv := &api.Server{Store: store, Config: cfg, Static: static, Version: version, LogPath: logPath, Dev: *devDir != ""}
 	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", *port))
 	if err != nil {
 		log.Fatalf("cannot listen: %v", err)

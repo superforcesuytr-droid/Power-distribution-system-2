@@ -27,6 +27,7 @@ type Server struct {
 	Static  fs.FS
 	Version string
 	LogPath string
+	Dev     bool
 }
 
 // Handler builds the router.
@@ -216,6 +217,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"config_path":  s.Config.Path(),
 		"log_path":     s.LogPath,
 		"dsn_from_env": fromEnv && dsn != "",
+		"dev":          s.Dev,
 		"role":         roleOf(r),
 		"server_time":  time.Now(),
 	})

@@ -1,10 +1,13 @@
 VERSION ?= 1.0.0
 LDFLAGS  = -s -w -X main.version=$(VERSION)
 
-.PHONY: run test windows macos linux winres clean
+.PHONY: run dev test windows macos linux winres clean
 
 run:            ## Run locally in browser mode (set DATABASE_URL or use the setup screen)
 	go run ./cmd/pds --browser
+
+dev:            ## Dev loop on a Mac: fixed port, UI served from web/ so edits need only a refresh
+	go run ./cmd/pds --dev web --browser --port 8080
 
 test:
 	go vet ./... && go test ./...
