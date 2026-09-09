@@ -22,10 +22,13 @@ type info struct {
 
 func lockPath(dir string) string { return filepath.Join(dir, "instance.json") }
 
-// Existing returns the URL of a copy that is already serving, if any. A file
-// left behind by a crashed or killed process is ignored, because the URL is
-// probed rather than trusted.
-func Existing(dir string) (string, bool) {
+// Existing returns the URL of a copy of this same build that is already
+// serving, if any. A file left behind by a crashed or killed process is
+// ignored, because the URL is probed rather than trusted, and so is a copy
+// reporting a different version: after an update, opening the application must
+// show the version just installed rather than an older one that happens to
+// still be running.
+func Existing(dir, version string) (string, bool) {
 	data, err := os.ReadFile(lockPath(dir))
 	if err != nil {
 		return "", false
@@ -51,6 +54,9 @@ func Existing(dir string) (string, bool) {
 		} `json:"db"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&probe); err != nil || probe.DB == nil {
+		return "", false
+	}
+	if probe.Version != version {
 		return "", false
 	}
 	return i.URL, true

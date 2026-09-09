@@ -85,7 +85,7 @@ func main() {
 	// Launching the application while a copy is already serving should show
 	// that copy rather than start a second server against the same database.
 	if soleInstance && !*headless {
-		if existing, ok := instance.Existing(config.Dir(cfgPath)); ok {
+		if existing, ok := instance.Existing(config.Dir(cfgPath), version); ok {
 			log.Printf("already running at %s; showing that window instead of starting again", existing)
 			window.Reveal(existing, appTitle, dataPath, 1320, 900)
 			return
