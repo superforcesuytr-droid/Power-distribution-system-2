@@ -890,11 +890,12 @@
       hvDragEndedAt = Date.now();
       if (!d.zone) return;
       try {
+        const on = { way_id: d.zone.wayId || 0, feeder_id: d.zone.feederId || 0, after_id: d.zone.afterId };
         if (d.mode === 'new') {
-          await api('POST', '/api/hv/devices', { way_id: d.zone.wayId, after_id: d.zone.afterId, kind: d.kind, name: '' });
+          await api('POST', '/api/hv/devices', { ...on, kind: d.kind, name: '' });
           await afterChange(d.label + ' fitted');
         } else {
-          await api('POST', '/api/hv/devices/' + d.deviceId + '/place', { way_id: d.zone.wayId, after_id: d.zone.afterId });
+          await api('POST', '/api/hv/devices/' + d.deviceId + '/place', on);
           await afterChange(d.label + ' moved');
         }
       } catch (err) { toast(err.message, 'error'); }
@@ -964,16 +965,25 @@
     // Vertical bands, top to bottom.
     const feederY = 40;            // the incoming supply annotation
     const swY = feederY + 54;       // the switchgear itself, drawn as an X
+    const DEV_GAP = 54;             // from a breaker to the first device below it
+    const devHeight = d => (d.kind === 'transformer' ? 68 : 50);
+
+    // The bar sits below the longest incoming chain, so however much is fitted
+    // on one feeder, every feeder still lands on the same bar.
+    let feederChain = 0;
+    net.feeders.forEach(f => {
+      let h = 0;
+      (f.devices || []).forEach((d, i) => { if (!(i === 0 && d.kind === 'switchgear')) h += devHeight(d); });
+      feederChain = Math.max(feederChain, h);
+    });
     // Room enough below the switchgear label for the "+ Way" control to sit
     // just above the bar without covering it.
-    const busY = swY + 88;          // the busbar every feeder lands on
+    const busY = swY + 88 + feederChain;
     const wayTapY = busY + 56;      // outgoing breaker, with room for its label
-    const DEV_GAP = 54;             // from the tap to the first fitted device
     const DEST_H = 58;
 
     // A way is as long as what is fitted on it, and every way is drawn to the
     // same depth so the destinations line up across the site.
-    const devHeight = d => (d.kind === 'transformer' ? 68 : 50);
     let chain = 0;
     net.feeders.forEach(f => f.ways.forEach(w => {
       let h = 0;
@@ -992,30 +1002,6 @@
     const busR = centers[centers.length - 1] + groups[groups.length - 1].width / 2;
     out.push(`<line x1="${busL}" y1="${busY}" x2="${busR}" y2="${busY}" stroke="${C.bus}" stroke-width="6" stroke-linecap="round"/>`);
 
-    // Name the sections the couplers divide the bar into, so it is plain which
-    // feeders back each other up and which side a coupler would tie in.
-    const cutAfter = new Set();
-    net.couplers.forEach(c => {
-      const l = byId[c.left_id], r = byId[c.right_id];
-      if (l && r) cutAfter.add(Math.min(l.i, r.i));
-    });
-    if (cutAfter.size) {
-      let from = 0;
-      const sections = [];
-      groups.forEach((g, i) => {
-        if (cutAfter.has(i) || i === groups.length - 1) {
-          sections.push({ from, to: i });
-          from = i + 1;
-        }
-      });
-      sections.forEach((sec, si) => {
-        const names = groups.slice(sec.from, sec.to + 1).map(g => g.f.name).join(', ');
-        const mid = (centers[sec.from] + centers[sec.to]) / 2;
-        out.push(`<text x="${mid}" y="${busY - 40}" text-anchor="middle" font-size="11" font-weight="700"
-          fill="${C.muted}" letter-spacing="1.4">SECTION ${String.fromCharCode(65 + si)} · ${esc(names)}</text>`);
-      });
-    }
-
     groups.forEach((g, gi) => {
       const f = g.f, cx = centers[gi];
       // The X is the switchgear, not a symbol wired to a box: its name sits
@@ -1023,19 +1009,36 @@
       out.push(`<text x="${cx}" y="${feederY}" text-anchor="middle" font-size="19" font-weight="700" fill="${C.label}">${esc(f.name)}</text>`);
       out.push(`<text x="${cx}" y="${feederY + 18}" text-anchor="middle" font-size="12" font-weight="600" fill="${C.muted}" letter-spacing=".8">${esc(f.voltage)}${f.source ? ' · ' + esc(f.source).toUpperCase() : ''}</text>`);
       out.push(`<line x1="${cx}" y1="${feederY + 28}" x2="${cx}" y2="${busY}" stroke="${C.bus}" stroke-width="3"/>`);
-      const swAct = canManage() ? `data-action="hv-edit-feeder" data-id="${f.id}"` : '';
-      out.push(`<g class="${swAct ? 'hv-node' : ''}" id="hv-feeder-${f.id}" ${swAct}>
-        <title>${esc(f.switchgear || f.name)} switchgear${canManage() ? ' - click to edit' : ''}</title>
-        <rect x="${cx - 74}" y="${swY - 30}" width="110" height="60" fill="transparent"/>
-        ${hvBreaker(cx, swY, C.bus)}
-        ${hvTag(cx - 15, swY + 26, f.switchgear || f.name, C.label, 13)}
-        ${f.rating_a ? `<text x="${cx + 20}" y="${swY + 5}" font-size="11" fill="${C.muted}">${fmtA(f.rating_a)} A</text>` : ''}
-      </g>`);
-      if (canManage()) {
-        out.push(`<g class="sld-btn" data-action="hv-edit-feeder" data-id="${f.id}"><title>Edit ${esc(f.name)}</title>
-          <rect x="${cx + 20}" y="${swY - 30}" width="24" height="24" rx="7" fill="#fff" stroke="${C.bus}" stroke-opacity=".4"/>
-          <g transform="translate(${cx + 22} ${swY - 28})" fill="none" stroke="${C.bus}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${SLD_ICONS.edit}</g></g>`);
+      const fHead = (f.devices || [])[0];
+      const fHeadIsSwitch = fHead && fHead.kind === 'switchgear';
+      if (fHeadIsSwitch) {
+        out.push(hvDevice(cx, swY, fHead));
+      } else {
+        const swAct = canManage() ? `data-action="hv-edit-feeder" data-id="${f.id}"` : '';
+        out.push(`<g class="${swAct ? 'hv-node' : ''}" id="hv-feeder-${f.id}" ${swAct}>
+          <title>${esc(f.switchgear || f.name)} switchgear${canManage() ? ' - click to edit' : ''}</title>
+          <rect x="${cx - 74}" y="${swY - 30}" width="110" height="60" fill="transparent"/>
+          ${hvBreaker(cx, swY, C.bus)}
+          ${hvTag(cx - 15, swY + 26, f.switchgear || f.name, C.label, 13)}
+        </g>`);
       }
+      if (canManage()) {
+        out.push(`<g class="sld-btn" data-action="hv-edit-feeder" data-id="${f.id}"><title>Edit feeder ${esc(f.name)}</title>
+          <rect x="${cx - 68}" y="${swY - 12}" width="24" height="24" rx="7" fill="#fff" stroke="${C.bus}" stroke-opacity=".4"/>
+          <g transform="translate(${cx - 66} ${swY - 10})" fill="none" stroke="${C.bus}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${SLD_ICONS.edit}</g></g>`);
+      }
+      // Whatever else is fitted on the incoming feeder, and the slots to drop
+      // more between them.
+      let fy = swY + DEV_GAP;
+      const fHeadId = fHeadIsSwitch ? fHead.id : 0;
+      if (canEdit()) hvDrops.push({ x: cx - 46, y: fy - 34, w: 92, h: 30, feederId: f.id, afterId: fHeadId });
+      (f.devices || []).forEach((dev, di) => {
+        if (di === 0 && dev.kind === 'switchgear') return;
+        out.push(hvDevice(cx, fy, dev));
+        const h = devHeight(dev);
+        if (canEdit()) hvDrops.push({ x: cx - 46, y: fy + h - 34, w: 92, h: 30, feederId: f.id, afterId: dev.id });
+        fy += h;
+      });
 
       if (!f.ways.length) {
         out.push(`<text x="${cx}" y="${busY + 40}" text-anchor="middle" font-size="12" fill="${C.muted}">No outgoing ways yet</text>`);
@@ -1061,16 +1064,16 @@
         // a drop slot above the first and below every one.
         let y = wayTapY + DEV_GAP;
         const headId = headIsSwitch ? head.id : 0;
-        hvDrops.push({ x: wx - 46, y: y - 34, w: 92, h: 30, wayId: way.id, afterId: headId });
+        if (canEdit()) hvDrops.push({ x: wx - 46, y: y - 34, w: 92, h: 30, wayId: way.id, afterId: headId });
         way.devices.forEach((dev, di) => {
           if (di === 0 && dev.kind === 'switchgear') return;   // already drawn at the tap
           out.push(hvDevice(wx, y, dev));
           const h = devHeight(dev);
-          hvDrops.push({ x: wx - 46, y: y + h - 34, w: 92, h: 30, wayId: way.id, afterId: dev.id });
+          if (canEdit()) hvDrops.push({ x: wx - 46, y: y + h - 34, w: 92, h: 30, wayId: way.id, afterId: dev.id });
           y += h;
         });
         // And a final slot just above the destination, for the end of the way.
-        hvDrops.push({ x: wx - 46, y: destY - 34, w: 92, h: 30, wayId: way.id,
+        if (canEdit()) hvDrops.push({ x: wx - 46, y: destY - 34, w: 92, h: 30, wayId: way.id,
           afterId: way.devices.length ? way.devices[way.devices.length - 1].id : headId });
         if (canEdit()) {
           out.push(sldPill(wx, destY - 26, 34, '+', `data-action="hv-add-device" data-way="${way.id}"`, C.line, 'Fit another device on this way'));
@@ -1080,14 +1083,17 @@
         const linked = !!way.dest_board_id;
         const dcol = linked ? C.dest : C.muted;
         const label = way.dest_label || way.dest_board_code || 'Not assigned';
-        const sub = linked ? (way.dest_building_name || 'Open on the dashboard')
-          : (way.dest_label ? 'External' : 'Set a destination');
+        // The point at the destination matters more on a drawing than the
+        // building it sits in, so it takes the line under the name.
+        const sub = way.dest_detail
+          || (linked ? (way.dest_building_name || 'Open on the dashboard')
+            : (way.dest_label ? 'External' : 'Set a destination'));
         // A linked box opens its board for anyone; an unlinked one is only a
         // shortcut to fill in the destination, so it is inert for a viewer.
         const destAct = linked ? `data-action="hv-open-dest" data-id="${way.dest_board_id}"`
           : (canEdit() ? `data-action="hv-edit-way" data-id="${way.id}"` : '');
         out.push(`<g class="${destAct ? 'hv-node ' : ''}${linked ? 'hv-linked' : ''}" id="hv-way-${way.id}" ${destAct}>
-          <title>${esc(label)}${linked ? ' - click to open this board' : (destAct ? ' - click to set where this way feeds' : '')}</title>
+          <title>${esc(label)}${way.dest_detail ? ' · ' + esc(way.dest_detail) : ''}${linked && way.dest_building_name ? ' · ' + esc(way.dest_building_name) : ''}${linked ? ' - click to open this board' : (destAct ? ' - click to set where this way feeds' : '')}</title>
           <rect x="${wx - WAY_W / 2 + 6}" y="${destY}" width="${WAY_W - 12}" height="${DEST_H}" rx="9"
                 fill="${linked ? '#f2fbf6' : '#f8fafc'}" stroke="${dcol}" stroke-width="2.5"/>
           <text x="${wx}" y="${destY + 25}" text-anchor="middle" font-size="15" font-weight="700" fill="${linked ? '#0f8a4f' : '#64748b'}">${esc(label)}</text>
@@ -1177,7 +1183,7 @@
         <title>${esc(title)}${canEdit() ? ' - click to change or remove' : ''}</title>
         <rect x="${cx - 40}" y="${cy - 26}" width="80" height="52" fill="transparent"/>${g.join('')}</g>`;
       if (canEdit()) {
-        inner += `<g class="sld-btn" data-action="hv-add-device" data-way="${d.way_id}" data-after="${d.id}">
+        inner += `<g class="sld-btn" data-action="hv-add-device" data-way="${d.way_id || ''}" data-feeder="${d.feeder_id || ''}" data-after="${d.id}">
           <title>Fit another device below this one</title>
           <rect x="${cx + 74}" y="${cy - 11}" width="22" height="22" rx="6" fill="#fff" stroke="${C.line}" stroke-opacity=".3"/>
           <text x="${cx + 85}" y="${cy + 5}" text-anchor="middle" font-size="15" font-weight="700" fill="${C.line}">+</text></g>`;
@@ -1490,7 +1496,8 @@
       ${field('Feeds board', 'dest_board_id', isEdit && way.dest_board_id ? way.dest_board_id : '', { type: 'select', full: true,
         options: [{ value: '', label: '— not a board in this system —' }].concat(boards.map(b => ({ value: b.id, label: b.code + ' · ' + b.building_name }))),
         hint: 'Linking a board makes the destination box clickable.' })}
-      ${field('Or destination label', 'dest_label', isEdit ? way.dest_label : '', { full: true, placeholder: 'e.g. FAC1/PE1, used when it is not a board here' })}
+      ${field('Or destination label', 'dest_label', isEdit ? way.dest_label : '', { placeholder: 'e.g. FAC1/PE1, when it is not a board here' })}
+      ${field('Where at that destination', 'dest_detail', isEdit ? (way.dest_detail || '') : '', { placeholder: 'e.g. TX15', hint: 'The transformer or panel the way terminates on.' })}
       ${field('Notes', 'notes', isEdit ? way.notes : '', { type: 'textarea', full: true })}
       ${isEdit ? `<p class="field full hint" style="margin:0">What is fitted on this way is set on the diagram: the <b>+</b> beside a device adds another below it, and clicking a device changes or removes it.</p>` : ''}`,
       async d => {
@@ -1498,7 +1505,7 @@
           feeder_id: Number(d.feeder_id), name: d.name,
           rating_a: d.rating_a === '' ? null : Number(d.rating_a),
           dest_board_id: d.dest_board_id ? Number(d.dest_board_id) : null,
-          dest_label: d.dest_label || '', notes: d.notes || '',
+          dest_label: d.dest_label || '', dest_detail: d.dest_detail || '', notes: d.notes || '',
         };
         if (isEdit) { state.focus = 'hv-way-' + way.id; await api('PUT', '/api/hv/ways/' + way.id, body); await afterChange('Way updated'); }
         else { const r = await api('POST', '/api/hv/ways', body); state.focus = 'hv-way-' + r.id; await afterChange('Way added'); }
@@ -1507,7 +1514,7 @@
   }
 
   // ---- devices fitted on a way
-  function hvDeviceForm(dev, wayId, afterId) {
+  function hvDeviceForm(dev, wayId, afterId, feederId) {
     const isEdit = !!(dev && dev.id);
     const kinds = Object.entries(DEVICE_LABEL).map(([value, label]) => ({ value, label }));
     const kind = isEdit ? dev.kind : 'rccb';
@@ -1530,7 +1537,7 @@
         };
         if (isEdit) { await api('PUT', '/api/hv/devices/' + dev.id, body); await afterChange('Device updated'); }
         else {
-          body.way_id = Number(wayId);
+          if (feederId) body.feeder_id = Number(feederId); else body.way_id = Number(wayId);
           if (afterId) body.after_id = Number(afterId);
           await api('POST', '/api/hv/devices', body);
           await afterChange('Device fitted');
@@ -1778,7 +1785,7 @@
       case 'hv-edit-feeder': if (canManage()) hvFeederForm(hvFindFeeder(id)); break;
       case 'hv-add-way': hvWayForm(null, id); break;
       case 'hv-edit-way': if (canEdit()) hvWayForm(hvFindWay(id)); break;
-      case 'hv-add-device': if (canEdit()) hvDeviceForm(null, el.dataset.way, el.dataset.after); break;
+      case 'hv-add-device': if (canEdit()) hvDeviceForm(null, el.dataset.way, el.dataset.after, el.dataset.feeder); break;
       case 'hv-edit-device': if (canEdit()) hvDeviceForm(hvFindDevice(id)); break;
       case 'hv-add-coupler': hvCouplerForm(null); break;
       case 'hv-edit-coupler': if (canManage()) hvCouplerForm(hvFindCoupler(id)); break;

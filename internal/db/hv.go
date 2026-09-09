@@ -44,6 +44,7 @@ func (s *Store) HVNetwork(ctx context.Context) (*model.HVNetwork, error) {
 			return nil, err
 		}
 		f.Ways = []model.HVWay{}
+		f.Devices = []model.HVDevice{}
 		index[f.ID] = len(n.Feeders)
 		n.Feeders = append(n.Feeders, f)
 	}
@@ -55,7 +56,7 @@ func (s *Store) HVNetwork(ctx context.Context) (*model.HVNetwork, error) {
 	// Ways, with the destination board resolved so the diagram can link to it.
 	wayAt := map[int64][2]int{}
 	wrows, err := pool.Query(ctx, `SELECT w.id, w.feeder_id, w.name, w.rating_a,
-		w.dest_board_id, w.dest_label, w.notes, w.position, w.created_at, w.updated_at,
+		w.dest_board_id, w.dest_label, w.dest_detail, w.notes, w.position, w.created_at, w.updated_at,
 		coalesce(bo.code, ''), coalesce(b.name, '')
 		FROM hv_ways w
 		JOIN hv_feeders f ON f.id = w.feeder_id
@@ -68,7 +69,7 @@ func (s *Store) HVNetwork(ctx context.Context) (*model.HVNetwork, error) {
 	for wrows.Next() {
 		var w model.HVWay
 		if err := wrows.Scan(&w.ID, &w.FeederID, &w.Name, &w.RatingA,
-			&w.DestBoardID, &w.DestLabel, &w.Notes, &w.Position, &w.CreatedAt, &w.UpdatedAt,
+			&w.DestBoardID, &w.DestLabel, &w.DestDetail, &w.Notes, &w.Position, &w.CreatedAt, &w.UpdatedAt,
 			&w.DestBoardCode, &w.DestBuildingName); err != nil {
 			wrows.Close()
 			return nil, err
@@ -84,19 +85,27 @@ func (s *Store) HVNetwork(ctx context.Context) (*model.HVNetwork, error) {
 		return nil, err
 	}
 
-	drows, err := pool.Query(ctx, `SELECT d.id, d.way_id, d.kind::text, d.name, d.rating_a, d.kva, d.ratio, d.notes, d.position
+	drows, err := pool.Query(ctx, `SELECT d.id, coalesce(d.way_id, 0), coalesce(d.feeder_id, 0),
+		d.kind::text, d.name, d.rating_a, d.kva, d.ratio, d.notes, d.position
 		FROM hv_devices d
-		JOIN hv_ways w ON w.id = d.way_id
-		JOIN hv_feeders f ON f.id = w.feeder_id
-		WHERE f.network_id = $1 ORDER BY d.position, d.id`, n.ID)
+		LEFT JOIN hv_ways w ON w.id = d.way_id
+		WHERE coalesce(w.feeder_id, d.feeder_id) IN (SELECT id FROM hv_feeders WHERE network_id = $1)
+		ORDER BY d.position, d.id`, n.ID)
 	if err != nil {
 		return nil, err
 	}
 	for drows.Next() {
 		var d model.HVDevice
-		if err := drows.Scan(&d.ID, &d.WayID, &d.Kind, &d.Name, &d.RatingA, &d.KVA, &d.Ratio, &d.Notes, &d.Position); err != nil {
+		if err := drows.Scan(&d.ID, &d.WayID, &d.FeederID, &d.Kind, &d.Name, &d.RatingA, &d.KVA, &d.Ratio,
+			&d.Notes, &d.Position); err != nil {
 			drows.Close()
 			return nil, err
+		}
+		if d.FeederID != 0 {
+			if i, ok := index[d.FeederID]; ok {
+				n.Feeders[i].Devices = append(n.Feeders[i].Devices, d)
+			}
+			continue
 		}
 		if p, ok := wayAt[d.WayID]; ok {
 			way := &n.Feeders[p[0]].Ways[p[1]]
@@ -135,6 +144,8 @@ func (s *Store) HVNetwork(ctx context.Context) (*model.HVNetwork, error) {
 		return model.NaturalLess(n.Feeders[i].Name, n.Feeders[j].Name)
 	})
 	for i := range n.Feeders {
+		fd := n.Feeders[i].Devices
+		sort.SliceStable(fd, func(a, b int) bool { return fd[a].Position < fd[b].Position })
 		ways := n.Feeders[i].Ways
 		sort.SliceStable(ways, func(a, b int) bool { return model.NaturalLess(ways[a].Name, ways[b].Name) })
 		for j := range ways {
@@ -169,6 +180,15 @@ func (s *Store) CreateHVFeeder(ctx context.Context, role string, f model.HVFeede
 		if err := tx.QueryRow(ctx, `INSERT INTO hv_feeders (network_id, name, switchgear, voltage, source, rating_a, position)
 			VALUES ($1,$2,$3,$4,$5,$6,(SELECT coalesce(max(position),-1)+1 FROM hv_feeders WHERE network_id = $1))
 			RETURNING id`, f.NetworkID, f.Name, f.Switchgear, f.Voltage, f.Source, f.RatingA).Scan(&id); err != nil {
+			return err
+		}
+		// A feeder is drawn from its switchgear down, so a new one starts with one.
+		name := f.Switchgear
+		if name == "" {
+			name = f.Name
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO hv_devices (feeder_id, kind, name, rating_a, position)
+			VALUES ($1, 'switchgear', $2, $3, 0)`, id, name, f.RatingA); err != nil {
 			return err
 		}
 		return s.audit(ctx, tx, role, "create", "hv_feeder", id, "Added feeder "+f.Name)
@@ -250,10 +270,10 @@ func (s *Store) MoveHVFeeder(ctx context.Context, role string, id int64, delta i
 func (s *Store) CreateHVWay(ctx context.Context, role string, w model.HVWay) (int64, error) {
 	var id int64
 	err := s.withTx(ctx, func(tx pgx.Tx) error {
-		if err := tx.QueryRow(ctx, `INSERT INTO hv_ways (feeder_id, name, rating_a, dest_board_id, dest_label, notes, position)
-			VALUES ($1,$2,$3,$4,$5,$6,
+		if err := tx.QueryRow(ctx, `INSERT INTO hv_ways (feeder_id, name, rating_a, dest_board_id, dest_label, dest_detail, notes, position)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,
 			(SELECT coalesce(max(position),-1)+1 FROM hv_ways WHERE feeder_id = $1)) RETURNING id`,
-			w.FeederID, w.Name, w.RatingA, w.DestBoardID, w.DestLabel, w.Notes).Scan(&id); err != nil {
+			w.FeederID, w.Name, w.RatingA, w.DestBoardID, w.DestLabel, w.DestDetail, w.Notes).Scan(&id); err != nil {
 			return err
 		}
 		// A way is drawn from its switchgear down, so a new one starts with one.
@@ -269,9 +289,9 @@ func (s *Store) CreateHVWay(ctx context.Context, role string, w model.HVWay) (in
 func (s *Store) UpdateHVWay(ctx context.Context, role string, w model.HVWay) error {
 	return s.withTx(ctx, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `UPDATE hv_ways SET feeder_id = coalesce(nullif($2::bigint, 0), feeder_id),
-			name = $3, rating_a = $4, dest_board_id = $5, dest_label = $6, notes = $7,
+			name = $3, rating_a = $4, dest_board_id = $5, dest_label = $6, dest_detail = $7, notes = $8,
 			updated_at = now() WHERE id = $1`,
-			w.ID, w.FeederID, w.Name, w.RatingA, w.DestBoardID, w.DestLabel, w.Notes)
+			w.ID, w.FeederID, w.Name, w.RatingA, w.DestBoardID, w.DestLabel, w.DestDetail, w.Notes)
 		if err != nil {
 			return err
 		}
@@ -343,57 +363,110 @@ func (s *Store) DeleteHVCoupler(ctx context.Context, role string, id int64) erro
 
 // Devices ------------------------------------------------------------------
 
-// renumberDevices makes the positions on a way dense and in order, so an insert
-// or a move has somewhere unambiguous to land.
-func renumberDevices(ctx context.Context, tx pgx.Tx, wayID int64) error {
+// devOwner is the conductor a device sits on: an outgoing way or an incoming
+// feeder, never both.
+type devOwner struct{ WayID, FeederID int64 }
+
+func (o devOwner) column() string {
+	if o.FeederID != 0 {
+		return "feeder_id"
+	}
+	return "way_id"
+}
+
+func (o devOwner) id() int64 {
+	if o.FeederID != 0 {
+		return o.FeederID
+	}
+	return o.WayID
+}
+
+func (o devOwner) valid() bool {
+	return (o.WayID != 0) != (o.FeederID != 0)
+}
+
+// renumberDevices makes the positions on one conductor dense and in order, so
+// an insert or a move has somewhere unambiguous to land.
+func renumberDevices(ctx context.Context, tx pgx.Tx, o devOwner) error {
 	_, err := tx.Exec(ctx, `WITH ordered AS (
 		SELECT id, row_number() OVER (ORDER BY position, id) - 1 AS rn
-		FROM hv_devices WHERE way_id = $1)
-		UPDATE hv_devices d SET position = o.rn FROM ordered o WHERE d.id = o.id`, wayID)
+		FROM hv_devices WHERE `+o.column()+` = $1)
+		UPDATE hv_devices d SET position = o.rn FROM ordered o WHERE d.id = o.id`, o.id())
 	return err
 }
 
-// CreateHVDevice fits a device on a way. With afterID set it lands immediately
-// below that device, which is what "add another one after this" means on a
-// drawing; otherwise it goes on the end.
+// DevTarget names the conductor a device is being placed on. Exactly one of
+// the two is expected; both zero means "leave it where it is".
+func DevTarget(wayID, feederID int64) devOwner {
+	return devOwner{WayID: wayID, FeederID: feederID}
+}
+
+// deviceOwner reads which conductor a device is on.
+func deviceOwner(ctx context.Context, tx pgx.Tx, id int64) (devOwner, string, string, error) {
+	var o devOwner
+	var kind, name string
+	err := tx.QueryRow(ctx, `SELECT coalesce(way_id, 0), coalesce(feeder_id, 0), kind::text, name
+		FROM hv_devices WHERE id = $1`, id).Scan(&o.WayID, &o.FeederID, &kind, &name)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return o, "", "", ErrNotFound
+	}
+	return o, kind, name, err
+}
+
+// CreateHVDevice fits a device on a conductor. With afterID set it lands
+// immediately below that device, which is what "add another one after this"
+// means on a drawing; otherwise it goes on the end.
 func (s *Store) CreateHVDevice(ctx context.Context, role string, d model.HVDevice, afterID int64) (int64, error) {
+	owner := devOwner{WayID: d.WayID, FeederID: d.FeederID}
+	if !owner.valid() {
+		return 0, &UserError{"A device sits on either a way or a feeder."}
+	}
 	var id int64
 	err := s.withTx(ctx, func(tx pgx.Tx) error {
-		if err := renumberDevices(ctx, tx, d.WayID); err != nil {
+		if err := renumberDevices(ctx, tx, owner); err != nil {
 			return err
 		}
 		pos := -1
 		if afterID > 0 {
-			var at int
-			var owner int64
-			if err := tx.QueryRow(ctx, `SELECT position, way_id FROM hv_devices WHERE id = $1`, afterID).Scan(&at, &owner); err != nil {
-				if errors.Is(err, pgx.ErrNoRows) {
-					return ErrNotFound
-				}
+			at, atOwner, err := devicePosition(ctx, tx, afterID)
+			if err != nil {
 				return err
 			}
-			if owner != d.WayID {
-				return &UserError{"That device is on a different way."}
+			if atOwner != owner {
+				return &UserError{"That device is on a different conductor."}
 			}
 			pos = at + 1
-			if _, err := tx.Exec(ctx, `UPDATE hv_devices SET position = position + 1 WHERE way_id = $1 AND position >= $2`,
-				d.WayID, pos); err != nil {
+			if _, err := tx.Exec(ctx, `UPDATE hv_devices SET position = position + 1
+				WHERE `+owner.column()+` = $1 AND position >= $2`, owner.id(), pos); err != nil {
 				return err
 			}
 		} else {
-			if err := tx.QueryRow(ctx, `SELECT coalesce(max(position),-1)+1 FROM hv_devices WHERE way_id = $1`, d.WayID).Scan(&pos); err != nil {
+			if err := tx.QueryRow(ctx, `SELECT coalesce(max(position),-1)+1 FROM hv_devices
+				WHERE `+owner.column()+` = $1`, owner.id()).Scan(&pos); err != nil {
 				return err
 			}
 		}
-		if err := tx.QueryRow(ctx, `INSERT INTO hv_devices (way_id, kind, name, rating_a, kva, ratio, notes, position)
-			VALUES ($1,$2::hv_device_kind,$3,$4,$5,$6,$7,$8) RETURNING id`,
-			d.WayID, d.Kind, d.Name, d.RatingA, d.KVA, d.Ratio, d.Notes, pos).Scan(&id); err != nil {
+		if err := tx.QueryRow(ctx, `INSERT INTO hv_devices (way_id, feeder_id, kind, name, rating_a, kva, ratio, notes, position)
+			VALUES (nullif($1::bigint,0), nullif($2::bigint,0), $3::hv_device_kind, $4, $5, $6, $7, $8, $9) RETURNING id`,
+			d.WayID, d.FeederID, d.Kind, d.Name, d.RatingA, d.KVA, d.Ratio, d.Notes, pos).Scan(&id); err != nil {
 			return err
 		}
 		return s.audit(ctx, tx, role, "create", "hv_device", id,
-			fmt.Sprintf("Fitted %s %s on a way", d.Kind, d.Name))
+			fmt.Sprintf("Fitted %s %s", d.Kind, d.Name))
 	})
 	return id, err
+}
+
+// devicePosition reads where a device sits and what it sits on.
+func devicePosition(ctx context.Context, tx pgx.Tx, id int64) (int, devOwner, error) {
+	var pos int
+	var o devOwner
+	err := tx.QueryRow(ctx, `SELECT position, coalesce(way_id, 0), coalesce(feeder_id, 0)
+		FROM hv_devices WHERE id = $1`, id).Scan(&pos, &o.WayID, &o.FeederID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, o, ErrNotFound
+	}
+	return pos, o, err
 }
 
 func (s *Store) UpdateHVDevice(ctx context.Context, role string, d model.HVDevice) error {
@@ -414,46 +487,41 @@ func (s *Store) UpdateHVDevice(ctx context.Context, role string, d model.HVDevic
 
 func (s *Store) DeleteHVDevice(ctx context.Context, role string, id int64) error {
 	return s.withTx(ctx, func(tx pgx.Tx) error {
-		var kind, name string
-		var wayID int64
-		if err := tx.QueryRow(ctx, `DELETE FROM hv_devices WHERE id = $1 RETURNING kind::text, name, way_id`, id).
-			Scan(&kind, &name, &wayID); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrNotFound
-			}
+		owner, kind, name, err := deviceOwner(ctx, tx, id)
+		if err != nil {
 			return err
 		}
-		if err := renumberDevices(ctx, tx, wayID); err != nil {
+		if _, err := tx.Exec(ctx, `DELETE FROM hv_devices WHERE id = $1`, id); err != nil {
+			return err
+		}
+		if err := renumberDevices(ctx, tx, owner); err != nil {
 			return err
 		}
 		return s.audit(ctx, tx, role, "delete", "hv_device", id,
-			fmt.Sprintf("Removed %s %s from a way", kind, name))
+			fmt.Sprintf("Removed %s %s", kind, name))
 	})
 }
 
-// MoveHVDevice shifts a device one place up or down its way.
+// MoveHVDevice shifts a device one place up or down its conductor.
 func (s *Store) MoveHVDevice(ctx context.Context, role string, id int64, delta int) error {
 	return s.withTx(ctx, func(tx pgx.Tx) error {
-		var wayID int64
-		var kind string
-		if err := tx.QueryRow(ctx, `SELECT way_id, kind::text FROM hv_devices WHERE id = $1`, id).Scan(&wayID, &kind); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrNotFound
-			}
+		owner, kind, _, err := deviceOwner(ctx, tx, id)
+		if err != nil {
 			return err
 		}
-		if err := renumberDevices(ctx, tx, wayID); err != nil {
+		if err := renumberDevices(ctx, tx, owner); err != nil {
 			return err
 		}
-		var pos int
-		if err := tx.QueryRow(ctx, `SELECT position FROM hv_devices WHERE id = $1`, id).Scan(&pos); err != nil {
+		pos, _, err := devicePosition(ctx, tx, id)
+		if err != nil {
 			return err
 		}
 		target := pos + delta
 		var otherID int64
-		err := tx.QueryRow(ctx, `SELECT id FROM hv_devices WHERE way_id = $1 AND position = $2`, wayID, target).Scan(&otherID)
+		err = tx.QueryRow(ctx, `SELECT id FROM hv_devices WHERE `+owner.column()+` = $1 AND position = $2`,
+			owner.id(), target).Scan(&otherID)
 		if errors.Is(err, pgx.ErrNoRows) {
-			return &UserError{"That device is already at the end of the way."}
+			return &UserError{"That device is already at the end."}
 		}
 		if err != nil {
 			return err
@@ -464,76 +532,71 @@ func (s *Store) MoveHVDevice(ctx context.Context, role string, id int64, delta i
 		if _, err := tx.Exec(ctx, `UPDATE hv_devices SET position = $2, updated_at = now() WHERE id = $1`, id, target); err != nil {
 			return err
 		}
-		return s.audit(ctx, tx, role, "update", "hv_device", id, "Moved a "+kind+" along its way")
+		return s.audit(ctx, tx, role, "update", "hv_device", id, "Moved a "+kind+" along its conductor")
 	})
 }
 
-// PlaceHVDevice moves a device to a position on a way, which may be a
-// different way from the one it is on. afterID names the device it should sit
-// below; zero puts it at the head of the chain. This is what a drag onto the
-// diagram resolves to, where a move one place at a time cannot express it.
-func (s *Store) PlaceHVDevice(ctx context.Context, role string, id, wayID, afterID int64) error {
+// PlaceHVDevice moves a device to a position on a conductor, which may be a
+// different one from the one it is on. afterID names the device it should sit
+// below; zero puts it at the head. This is what a drag onto the diagram
+// resolves to, where a move one place at a time cannot express it.
+func (s *Store) PlaceHVDevice(ctx context.Context, role string, id int64, target devOwner, afterID int64) error {
 	return s.withTx(ctx, func(tx pgx.Tx) error {
-		var fromWay int64
-		var kind, name string
-		if err := tx.QueryRow(ctx, `SELECT way_id, kind::text, name FROM hv_devices WHERE id = $1`, id).
-			Scan(&fromWay, &kind, &name); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrNotFound
-			}
+		from, kind, name, err := deviceOwner(ctx, tx, id)
+		if err != nil {
 			return err
 		}
-		if wayID <= 0 {
-			wayID = fromWay
-		}
-		var exists bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM hv_ways WHERE id = $1)`, wayID).Scan(&exists); err != nil {
-			return err
-		}
-		if !exists {
-			return &UserError{"That way no longer exists."}
+		if !target.valid() {
+			target = from
 		}
 		if afterID == id {
 			return nil // dropped back where it came from
 		}
+		var exists bool
+		table := "hv_ways"
+		if target.FeederID != 0 {
+			table = "hv_feeders"
+		}
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM `+table+` WHERE id = $1)`, target.id()).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			return &UserError{"That conductor no longer exists."}
+		}
 
 		// Take it out of its current chain first, so positions either side
-		// close up whether or not the way is changing.
+		// close up whether or not the conductor is changing.
 		if _, err := tx.Exec(ctx, `UPDATE hv_devices SET position = -1 WHERE id = $1`, id); err != nil {
 			return err
 		}
-		if err := renumberDevices(ctx, tx, fromWay); err != nil {
+		if err := renumberDevices(ctx, tx, from); err != nil {
 			return err
 		}
 
 		pos := 0
 		if afterID > 0 {
-			var at int
-			var owner int64
-			if err := tx.QueryRow(ctx, `SELECT position, way_id FROM hv_devices WHERE id = $1`, afterID).Scan(&at, &owner); err != nil {
-				if errors.Is(err, pgx.ErrNoRows) {
-					return ErrNotFound
-				}
+			at, atOwner, err := devicePosition(ctx, tx, afterID)
+			if err != nil {
 				return err
 			}
-			if owner != wayID {
-				return &UserError{"Drop it onto a place on the same way."}
+			if atOwner != target {
+				return &UserError{"Drop it onto a place on the same conductor."}
 			}
 			pos = at + 1
 		}
 		if _, err := tx.Exec(ctx, `UPDATE hv_devices SET position = position + 1
-			WHERE way_id = $1 AND position >= $2 AND id <> $3`, wayID, pos, id); err != nil {
+			WHERE `+target.column()+` = $1 AND position >= $2 AND id <> $3`, target.id(), pos, id); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `UPDATE hv_devices SET way_id = $2, position = $3, updated_at = now() WHERE id = $1`,
-			id, wayID, pos); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE hv_devices SET way_id = nullif($2::bigint,0), feeder_id = nullif($3::bigint,0),
+			position = $4, updated_at = now() WHERE id = $1`, id, target.WayID, target.FeederID, pos); err != nil {
 			return err
 		}
-		if err := renumberDevices(ctx, tx, wayID); err != nil {
+		if err := renumberDevices(ctx, tx, target); err != nil {
 			return err
 		}
-		if fromWay != wayID {
-			if err := renumberDevices(ctx, tx, fromWay); err != nil {
+		if from != target {
+			if err := renumberDevices(ctx, tx, from); err != nil {
 				return err
 			}
 		}

@@ -199,6 +199,7 @@ type hvWayInput struct {
 
 	DestBoardID *int64 `json:"dest_board_id"`
 	DestLabel   string `json:"dest_label"`
+	DestDetail  string `json:"dest_detail"`
 	Notes       string `json:"notes"`
 }
 
@@ -209,6 +210,7 @@ func (in hvWayInput) toModel(id int64) (model.HVWay, error) {
 		RatingA:     in.RatingA,
 		DestBoardID: in.DestBoardID,
 		DestLabel:   strings.TrimSpace(in.DestLabel),
+		DestDetail:  strings.TrimSpace(in.DestDetail),
 		Notes:       strings.TrimSpace(in.Notes),
 	}
 	if err := required("Way name", w.Name); err != nil {
@@ -390,19 +392,20 @@ func (s *Server) handleHVCouplerDelete(w http.ResponseWriter, r *http.Request) {
 // Devices ------------------------------------------------------------------
 
 type hvDeviceInput struct {
-	WayID   int64    `json:"way_id"`
-	AfterID int64    `json:"after_id"`
-	Kind    string   `json:"kind"`
-	Name    string   `json:"name"`
-	RatingA *float64 `json:"rating_a"`
-	KVA     *float64 `json:"kva"`
-	Ratio   string   `json:"ratio"`
-	Notes   string   `json:"notes"`
+	WayID    int64    `json:"way_id"`
+	FeederID int64    `json:"feeder_id"`
+	AfterID  int64    `json:"after_id"`
+	Kind     string   `json:"kind"`
+	Name     string   `json:"name"`
+	RatingA  *float64 `json:"rating_a"`
+	KVA      *float64 `json:"kva"`
+	Ratio    string   `json:"ratio"`
+	Notes    string   `json:"notes"`
 }
 
 func (in hvDeviceInput) toModel(id int64) (model.HVDevice, error) {
 	d := model.HVDevice{
-		ID: id, WayID: in.WayID,
+		ID: id, WayID: in.WayID, FeederID: in.FeederID,
 		Kind:    strings.ToLower(strings.TrimSpace(in.Kind)),
 		Name:    strings.TrimSpace(in.Name),
 		RatingA: in.RatingA,
@@ -433,8 +436,8 @@ func (s *Server) handleHVDeviceCreate(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	if d.WayID <= 0 {
-		fail(w, &db.UserError{Msg: "Way is required."})
+	if (d.WayID > 0) == (d.FeederID > 0) {
+		fail(w, &db.UserError{Msg: "A device sits on either a way or a feeder."})
 		return
 	}
 	id, err := s.Store.CreateHVDevice(ctx(r), roleOf(r), d, in.AfterID)
@@ -512,14 +515,15 @@ func (s *Server) handleHVDevicePlace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		WayID   int64 `json:"way_id"`
-		AfterID int64 `json:"after_id"`
+		WayID    int64 `json:"way_id"`
+		FeederID int64 `json:"feeder_id"`
+		AfterID  int64 `json:"after_id"`
 	}
 	if err := decode(r, &in); err != nil {
 		fail(w, err)
 		return
 	}
-	if err := s.Store.PlaceHVDevice(ctx(r), roleOf(r), id, in.WayID, in.AfterID); err != nil {
+	if err := s.Store.PlaceHVDevice(ctx(r), roleOf(r), id, db.DevTarget(in.WayID, in.FeederID), in.AfterID); err != nil {
 		fail(w, err)
 		return
 	}

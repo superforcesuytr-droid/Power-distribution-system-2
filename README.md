@@ -29,10 +29,10 @@ The single line diagram is drawn from the same data and can be edited directly:
   along the way or removed. Every way lands on a destination box that opens the
   board it feeds. Everything on it is editable in place.
 - **Build the overview by dragging** - a palette of device types above the
-  diagram; drop one onto a way and it is fitted there with the conductor drawn
-  through it, or drag a device already on the diagram to a different place on
-  the same way. Couplers name the bus sections they divide, so it is plain which
-  feeders back each other up.
+  diagram; drop one onto a way or an incoming feeder and it is fitted there with
+  the conductor drawn through it, or drag a device already on the diagram to a
+  different place. A way also records the point at its destination it
+  terminates on, such as TX15 at FAC1.
 - **Zoom on both diagrams** - buttons for in, out, fit and actual size, Ctrl or
   Cmd with the scroll wheel to zoom about the pointer, and drag to pan. Each
   diagram remembers its own zoom.

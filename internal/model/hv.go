@@ -45,8 +45,11 @@ func IsProtection(k string) bool {
 
 // HVDevice is one item on a way, drawn in position order down the conductor.
 type HVDevice struct {
-	ID       int64    `json:"id"`
+	ID int64 `json:"id"`
+	// Exactly one of WayID and FeederID is set: a device sits on an outgoing
+	// way or on an incoming feeder.
 	WayID    int64    `json:"way_id"`
+	FeederID int64    `json:"feeder_id"`
 	Kind     string   `json:"kind"`
 	Name     string   `json:"name"`
 	RatingA  *float64 `json:"rating_a"`
@@ -80,14 +83,15 @@ type HVFeeder struct {
 	Name      string `json:"name"`
 	// Switchgear is the designation written beside the breaker symbol, such as
 	// 22SGI1, as distinct from the feeder's own name.
-	Switchgear string    `json:"switchgear"`
-	Voltage    string    `json:"voltage"`
-	Source     string    `json:"source"`
-	RatingA    *float64  `json:"rating_a"`
-	Position   int       `json:"position"`
-	Ways       []HVWay   `json:"ways"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	Switchgear string     `json:"switchgear"`
+	Voltage    string     `json:"voltage"`
+	Source     string     `json:"source"`
+	RatingA    *float64   `json:"rating_a"`
+	Position   int        `json:"position"`
+	Devices    []HVDevice `json:"devices"`
+	Ways       []HVWay    `json:"ways"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
 }
 
 // HVWay is an outgoing way from a feeder's switchgear: optionally protected,
@@ -106,8 +110,11 @@ type HVWay struct {
 	// the label carries it when the destination is not a board in this system.
 	DestBoardID *int64 `json:"dest_board_id"`
 	DestLabel   string `json:"dest_label"`
-	Notes       string `json:"notes"`
-	Position    int    `json:"position"`
+	// DestDetail names the point at the destination the way terminates on,
+	// such as TX15 at FAC1.
+	DestDetail string `json:"dest_detail"`
+	Notes      string `json:"notes"`
+	Position   int    `json:"position"`
 
 	// Derived: filled from the linked board so the diagram can label and link
 	// the destination without a second lookup.
@@ -146,6 +153,11 @@ func (n *HVNetwork) Compute() {
 	n.FeederCount = len(n.Feeders)
 	n.WayCount, n.TransformerCount, n.ProtectedCount, n.LinkedCount = 0, 0, 0, 0
 	for i := range n.Feeders {
+		for _, d := range n.Feeders[i].Devices {
+			if d.Kind == DeviceTransformer {
+				n.TransformerCount++
+			}
+		}
 		for _, w := range n.Feeders[i].Ways {
 			n.WayCount++
 			protected := false
