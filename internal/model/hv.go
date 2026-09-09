@@ -2,35 +2,58 @@ package model
 
 import "time"
 
-// Protection fitted on an outgoing high-voltage way (mirrors the hv_protection
-// enum in PostgreSQL).
+// Device kinds that can sit on an outgoing way, in the order a drawing would
+// show them (mirrors the hv_device_kind enum in PostgreSQL).
 const (
-	ProtectionNone = "none"
-	ProtectionRCCB = "rccb" // residual current circuit breaker
-	ProtectionELR  = "elr"  // earth leakage relay
-	ProtectionELCB = "elcb" // earth leakage circuit breaker
+	DeviceSwitchgear  = "switchgear"
+	DeviceIsolator    = "isolator"
+	DeviceRCCB        = "rccb"
+	DeviceELR         = "elr"
+	DeviceELCB        = "elcb"
+	DeviceTransformer = "transformer"
+	DeviceFuse        = "fuse"
+	DeviceMeter       = "meter"
 )
 
-// ValidProtection reports whether p is one of the protection values.
-func ValidProtection(p string) bool {
-	switch p {
-	case ProtectionNone, ProtectionRCCB, ProtectionELR, ProtectionELCB:
-		return true
+// DeviceKinds lists every kind with the label a drawing gives it.
+var DeviceKinds = []struct{ Kind, Label string }{
+	{DeviceSwitchgear, "Switchgear"},
+	{DeviceIsolator, "Isolator"},
+	{DeviceRCCB, "RCCB"},
+	{DeviceELR, "ELR"},
+	{DeviceELCB, "ELCB"},
+	{DeviceTransformer, "Transformer"},
+	{DeviceFuse, "Fuse"},
+	{DeviceMeter, "Meter"},
+}
+
+// ValidDeviceKind reports whether k is a kind of device that can sit on a way.
+func ValidDeviceKind(k string) bool {
+	for _, d := range DeviceKinds {
+		if d.Kind == k {
+			return true
+		}
 	}
 	return false
 }
 
-// ProtectionLabel is how a protection type is written on the diagram.
-func ProtectionLabel(p string) string {
-	switch p {
-	case ProtectionRCCB:
-		return "RCCB"
-	case ProtectionELR:
-		return "ELR"
-	case ProtectionELCB:
-		return "ELCB"
-	}
-	return ""
+// IsProtection reports whether a device kind is earth-leakage protection,
+// which is what the overview counts as "protected".
+func IsProtection(k string) bool {
+	return k == DeviceRCCB || k == DeviceELR || k == DeviceELCB
+}
+
+// HVDevice is one item on a way, drawn in position order down the conductor.
+type HVDevice struct {
+	ID       int64    `json:"id"`
+	WayID    int64    `json:"way_id"`
+	Kind     string   `json:"kind"`
+	Name     string   `json:"name"`
+	RatingA  *float64 `json:"rating_a"`
+	KVA      *float64 `json:"kva"`
+	Ratio    string   `json:"ratio"`
+	Notes    string   `json:"notes"`
+	Position int      `json:"position"`
 }
 
 // HVNetwork is the site-wide high-voltage distribution overview: the incoming
@@ -75,14 +98,12 @@ type HVWay struct {
 	Name     string   `json:"name"`
 	RatingA  *float64 `json:"rating_a"`
 
-	Protection     string `json:"protection"`
-	ProtectionNote string `json:"protection_note"`
+	// Devices are everything fitted on this way, in the order they appear down
+	// the conductor.
+	Devices []HVDevice `json:"devices"`
 
-	HasTransformer   bool     `json:"has_transformer"`
-	TransformerName  string   `json:"transformer_name"`
-	TransformerKVA   *float64 `json:"transformer_kva"`
-	TransformerRatio string   `json:"transformer_ratio"`
-
+	// Where the way lands. A board reference makes the destination clickable;
+	// the label carries it when the destination is not a board in this system.
 	DestBoardID *int64 `json:"dest_board_id"`
 	DestLabel   string `json:"dest_label"`
 	Notes       string `json:"notes"`
@@ -127,10 +148,16 @@ func (n *HVNetwork) Compute() {
 	for i := range n.Feeders {
 		for _, w := range n.Feeders[i].Ways {
 			n.WayCount++
-			if w.HasTransformer {
-				n.TransformerCount++
+			protected := false
+			for _, d := range w.Devices {
+				switch {
+				case d.Kind == DeviceTransformer:
+					n.TransformerCount++
+				case IsProtection(d.Kind):
+					protected = true
+				}
 			}
-			if w.Protection != ProtectionNone && w.Protection != "" {
+			if protected {
 				n.ProtectedCount++
 			}
 			if w.DestBoardID != nil {

@@ -53,8 +53,8 @@ func (s *Store) HVNetwork(ctx context.Context) (*model.HVNetwork, error) {
 	}
 
 	// Ways, with the destination board resolved so the diagram can link to it.
-	wrows, err := pool.Query(ctx, `SELECT w.id, w.feeder_id, w.name, w.rating_a, w.protection::text, w.protection_note,
-		w.has_transformer, w.transformer_name, w.transformer_kva, w.transformer_ratio,
+	wayAt := map[int64][2]int{}
+	wrows, err := pool.Query(ctx, `SELECT w.id, w.feeder_id, w.name, w.rating_a,
 		w.dest_board_id, w.dest_label, w.notes, w.position, w.created_at, w.updated_at,
 		coalesce(bo.code, ''), coalesce(b.name, '')
 		FROM hv_ways w
@@ -67,19 +67,44 @@ func (s *Store) HVNetwork(ctx context.Context) (*model.HVNetwork, error) {
 	}
 	for wrows.Next() {
 		var w model.HVWay
-		if err := wrows.Scan(&w.ID, &w.FeederID, &w.Name, &w.RatingA, &w.Protection, &w.ProtectionNote,
-			&w.HasTransformer, &w.TransformerName, &w.TransformerKVA, &w.TransformerRatio,
+		if err := wrows.Scan(&w.ID, &w.FeederID, &w.Name, &w.RatingA,
 			&w.DestBoardID, &w.DestLabel, &w.Notes, &w.Position, &w.CreatedAt, &w.UpdatedAt,
 			&w.DestBoardCode, &w.DestBuildingName); err != nil {
 			wrows.Close()
 			return nil, err
 		}
+		w.Devices = []model.HVDevice{}
 		if i, ok := index[w.FeederID]; ok {
 			n.Feeders[i].Ways = append(n.Feeders[i].Ways, w)
+			wayAt[w.ID] = [2]int{i, len(n.Feeders[i].Ways) - 1}
 		}
 	}
 	wrows.Close()
 	if err := wrows.Err(); err != nil {
+		return nil, err
+	}
+
+	drows, err := pool.Query(ctx, `SELECT d.id, d.way_id, d.kind::text, d.name, d.rating_a, d.kva, d.ratio, d.notes, d.position
+		FROM hv_devices d
+		JOIN hv_ways w ON w.id = d.way_id
+		JOIN hv_feeders f ON f.id = w.feeder_id
+		WHERE f.network_id = $1 ORDER BY d.position, d.id`, n.ID)
+	if err != nil {
+		return nil, err
+	}
+	for drows.Next() {
+		var d model.HVDevice
+		if err := drows.Scan(&d.ID, &d.WayID, &d.Kind, &d.Name, &d.RatingA, &d.KVA, &d.Ratio, &d.Notes, &d.Position); err != nil {
+			drows.Close()
+			return nil, err
+		}
+		if p, ok := wayAt[d.WayID]; ok {
+			way := &n.Feeders[p[0]].Ways[p[1]]
+			way.Devices = append(way.Devices, d)
+		}
+	}
+	drows.Close()
+	if err := drows.Err(); err != nil {
 		return nil, err
 	}
 
@@ -112,6 +137,10 @@ func (s *Store) HVNetwork(ctx context.Context) (*model.HVNetwork, error) {
 	for i := range n.Feeders {
 		ways := n.Feeders[i].Ways
 		sort.SliceStable(ways, func(a, b int) bool { return model.NaturalLess(ways[a].Name, ways[b].Name) })
+		for j := range ways {
+			devs := ways[j].Devices
+			sort.SliceStable(devs, func(a, b int) bool { return devs[a].Position < devs[b].Position })
+		}
 	}
 	n.Compute()
 	return &n, nil
@@ -221,12 +250,15 @@ func (s *Store) MoveHVFeeder(ctx context.Context, role string, id int64, delta i
 func (s *Store) CreateHVWay(ctx context.Context, role string, w model.HVWay) (int64, error) {
 	var id int64
 	err := s.withTx(ctx, func(tx pgx.Tx) error {
-		if err := tx.QueryRow(ctx, `INSERT INTO hv_ways (feeder_id, name, rating_a, protection, protection_note,
-			has_transformer, transformer_name, transformer_kva, transformer_ratio, dest_board_id, dest_label, notes, position)
-			VALUES ($1,$2,$3,$4::hv_protection,$5,$6,$7,$8,$9,$10,$11,$12,
+		if err := tx.QueryRow(ctx, `INSERT INTO hv_ways (feeder_id, name, rating_a, dest_board_id, dest_label, notes, position)
+			VALUES ($1,$2,$3,$4,$5,$6,
 			(SELECT coalesce(max(position),-1)+1 FROM hv_ways WHERE feeder_id = $1)) RETURNING id`,
-			w.FeederID, w.Name, w.RatingA, w.Protection, w.ProtectionNote, w.HasTransformer, w.TransformerName,
-			w.TransformerKVA, w.TransformerRatio, w.DestBoardID, w.DestLabel, w.Notes).Scan(&id); err != nil {
+			w.FeederID, w.Name, w.RatingA, w.DestBoardID, w.DestLabel, w.Notes).Scan(&id); err != nil {
+			return err
+		}
+		// A way is drawn from its switchgear down, so a new one starts with one.
+		if _, err := tx.Exec(ctx, `INSERT INTO hv_devices (way_id, kind, name, rating_a, position)
+			VALUES ($1, 'switchgear', $2, $3, 0)`, id, w.Name, w.RatingA); err != nil {
 			return err
 		}
 		return s.audit(ctx, tx, role, "create", "hv_way", id, "Added way "+w.Name+" feeding "+w.Destination())
@@ -237,11 +269,9 @@ func (s *Store) CreateHVWay(ctx context.Context, role string, w model.HVWay) (in
 func (s *Store) UpdateHVWay(ctx context.Context, role string, w model.HVWay) error {
 	return s.withTx(ctx, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `UPDATE hv_ways SET feeder_id = coalesce(nullif($2::bigint, 0), feeder_id),
-			name = $3, rating_a = $4, protection = $5::hv_protection, protection_note = $6,
-			has_transformer = $7, transformer_name = $8, transformer_kva = $9, transformer_ratio = $10,
-			dest_board_id = $11, dest_label = $12, notes = $13, updated_at = now() WHERE id = $1`,
-			w.ID, w.FeederID, w.Name, w.RatingA, w.Protection, w.ProtectionNote, w.HasTransformer,
-			w.TransformerName, w.TransformerKVA, w.TransformerRatio, w.DestBoardID, w.DestLabel, w.Notes)
+			name = $3, rating_a = $4, dest_board_id = $5, dest_label = $6, notes = $7,
+			updated_at = now() WHERE id = $1`,
+			w.ID, w.FeederID, w.Name, w.RatingA, w.DestBoardID, w.DestLabel, w.Notes)
 		if err != nil {
 			return err
 		}
@@ -308,5 +338,132 @@ func (s *Store) DeleteHVCoupler(ctx context.Context, role string, id int64) erro
 			return err
 		}
 		return s.audit(ctx, tx, role, "delete", "hv_coupler", id, "Deleted coupler "+name)
+	})
+}
+
+// Devices ------------------------------------------------------------------
+
+// renumberDevices makes the positions on a way dense and in order, so an insert
+// or a move has somewhere unambiguous to land.
+func renumberDevices(ctx context.Context, tx pgx.Tx, wayID int64) error {
+	_, err := tx.Exec(ctx, `WITH ordered AS (
+		SELECT id, row_number() OVER (ORDER BY position, id) - 1 AS rn
+		FROM hv_devices WHERE way_id = $1)
+		UPDATE hv_devices d SET position = o.rn FROM ordered o WHERE d.id = o.id`, wayID)
+	return err
+}
+
+// CreateHVDevice fits a device on a way. With afterID set it lands immediately
+// below that device, which is what "add another one after this" means on a
+// drawing; otherwise it goes on the end.
+func (s *Store) CreateHVDevice(ctx context.Context, role string, d model.HVDevice, afterID int64) (int64, error) {
+	var id int64
+	err := s.withTx(ctx, func(tx pgx.Tx) error {
+		if err := renumberDevices(ctx, tx, d.WayID); err != nil {
+			return err
+		}
+		pos := -1
+		if afterID > 0 {
+			var at int
+			var owner int64
+			if err := tx.QueryRow(ctx, `SELECT position, way_id FROM hv_devices WHERE id = $1`, afterID).Scan(&at, &owner); err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return ErrNotFound
+				}
+				return err
+			}
+			if owner != d.WayID {
+				return &UserError{"That device is on a different way."}
+			}
+			pos = at + 1
+			if _, err := tx.Exec(ctx, `UPDATE hv_devices SET position = position + 1 WHERE way_id = $1 AND position >= $2`,
+				d.WayID, pos); err != nil {
+				return err
+			}
+		} else {
+			if err := tx.QueryRow(ctx, `SELECT coalesce(max(position),-1)+1 FROM hv_devices WHERE way_id = $1`, d.WayID).Scan(&pos); err != nil {
+				return err
+			}
+		}
+		if err := tx.QueryRow(ctx, `INSERT INTO hv_devices (way_id, kind, name, rating_a, kva, ratio, notes, position)
+			VALUES ($1,$2::hv_device_kind,$3,$4,$5,$6,$7,$8) RETURNING id`,
+			d.WayID, d.Kind, d.Name, d.RatingA, d.KVA, d.Ratio, d.Notes, pos).Scan(&id); err != nil {
+			return err
+		}
+		return s.audit(ctx, tx, role, "create", "hv_device", id,
+			fmt.Sprintf("Fitted %s %s on a way", d.Kind, d.Name))
+	})
+	return id, err
+}
+
+func (s *Store) UpdateHVDevice(ctx context.Context, role string, d model.HVDevice) error {
+	return s.withTx(ctx, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE hv_devices SET kind = $2::hv_device_kind, name = $3, rating_a = $4,
+			kva = $5, ratio = $6, notes = $7, updated_at = now() WHERE id = $1`,
+			d.ID, d.Kind, d.Name, d.RatingA, d.KVA, d.Ratio, d.Notes)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrNotFound
+		}
+		return s.audit(ctx, tx, role, "update", "hv_device", d.ID,
+			fmt.Sprintf("Updated %s %s", d.Kind, d.Name))
+	})
+}
+
+func (s *Store) DeleteHVDevice(ctx context.Context, role string, id int64) error {
+	return s.withTx(ctx, func(tx pgx.Tx) error {
+		var kind, name string
+		var wayID int64
+		if err := tx.QueryRow(ctx, `DELETE FROM hv_devices WHERE id = $1 RETURNING kind::text, name, way_id`, id).
+			Scan(&kind, &name, &wayID); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
+		}
+		if err := renumberDevices(ctx, tx, wayID); err != nil {
+			return err
+		}
+		return s.audit(ctx, tx, role, "delete", "hv_device", id,
+			fmt.Sprintf("Removed %s %s from a way", kind, name))
+	})
+}
+
+// MoveHVDevice shifts a device one place up or down its way.
+func (s *Store) MoveHVDevice(ctx context.Context, role string, id int64, delta int) error {
+	return s.withTx(ctx, func(tx pgx.Tx) error {
+		var wayID int64
+		var kind string
+		if err := tx.QueryRow(ctx, `SELECT way_id, kind::text FROM hv_devices WHERE id = $1`, id).Scan(&wayID, &kind); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
+		}
+		if err := renumberDevices(ctx, tx, wayID); err != nil {
+			return err
+		}
+		var pos int
+		if err := tx.QueryRow(ctx, `SELECT position FROM hv_devices WHERE id = $1`, id).Scan(&pos); err != nil {
+			return err
+		}
+		target := pos + delta
+		var otherID int64
+		err := tx.QueryRow(ctx, `SELECT id FROM hv_devices WHERE way_id = $1 AND position = $2`, wayID, target).Scan(&otherID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return &UserError{"That device is already at the end of the way."}
+		}
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE hv_devices SET position = $2, updated_at = now() WHERE id = $1`, otherID, pos); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE hv_devices SET position = $2, updated_at = now() WHERE id = $1`, id, target); err != nil {
+			return err
+		}
+		return s.audit(ctx, tx, role, "update", "hv_device", id, "Moved a "+kind+" along its way")
 	})
 }

@@ -781,7 +781,10 @@
   // The site-wide 22 kV picture that sits above the distribution boards:
   // incoming feeders, the switchgear each lands on, couplers between them, and
   // the outgoing ways that carry supply down to a board.
-  const PROT_LABEL = { rccb: 'RCCB', elr: 'ELR', elcb: 'ELCB' };
+  const DEVICE_LABEL = {
+    switchgear: 'Switchgear', isolator: 'Isolator', rccb: 'RCCB', elr: 'ELR',
+    elcb: 'ELCB', transformer: 'Transformer', fuse: 'Fuse', meter: 'Meter',
+  };
 
   async function renderHV() {
     const [net, boards] = await Promise.all([api('GET', '/api/hv'), api('GET', '/api/boards')]);
@@ -805,7 +808,7 @@
             <div><div class="n">${net.linked_count}</div><div class="l">Linked</div></div>
           </div>
         </div>
-        ${canEdit() ? `<p class="sld-hint">Click any destination box to jump to that board. Use <b>+ Way</b> under a feeder to add an outgoing way, and the way's <b>✎</b> to fit an RCCB, ELR or ELCB, add a transformer, or set where it feeds.</p>` : ''}
+        ${canEdit() ? `<p class="sld-hint">Click any destination box to jump to that board. <b>+ Way</b> adds an outgoing way to a feeder. On a way, the <b>+</b> beside a device fits another one below it, and clicking a device changes, reorders or removes it.</p>` : ''}
         <div class="hv-toolbar">
           ${canManage() ? '<button class="btn btn-primary" data-action="hv-add-feeder">+ Add feeder</button>' : ''}
           ${canManage() && net.feeders.length > 1 ? '<button class="btn" data-action="hv-add-coupler">+ Add coupler</button>' : ''}
@@ -821,7 +824,7 @@
     // `label` is for text that has to be read at a glance, `muted` for the
     // secondary figures beside a symbol.
     const C = { bus: '#0b74c4', line: '#334155', tx: '#7c3aed', prot: '#d97a06', dest: '#0f8a4f', muted: '#94a3b8', label: '#475569' };
-    const WAY_W = 150, WAY_GAP = 16, FEEDER_GAP = 90, MARGIN = 44;
+    const WAY_W = 182, WAY_GAP = 16, FEEDER_GAP = 90, MARGIN = 44;
     const MIN_FEEDER_W = 250;
 
     const groups = net.feeders.map(f => {
@@ -844,10 +847,19 @@
     // just above the bar without covering it.
     const busY = swY + 88;          // the busbar every feeder lands on
     const wayTapY = busY + 56;      // outgoing breaker, with room for its label
-    const protY = wayTapY + 52;     // protection device, when fitted
-    const txY = protY + 62;         // transformer, when fitted
-    const destY = txY + 82;         // destination box
+    const DEV_GAP = 54;             // from the tap to the first fitted device
     const DEST_H = 58;
+
+    // A way is as long as what is fitted on it, and every way is drawn to the
+    // same depth so the destinations line up across the site.
+    const devHeight = d => (d.kind === 'transformer' ? 68 : 50);
+    let chain = 0;
+    net.feeders.forEach(f => f.ways.forEach(w => {
+      let h = 0;
+      (w.devices || []).forEach((d, i) => { if (!(i === 0 && d.kind === 'switchgear')) h += devHeight(d); });
+      chain = Math.max(chain, h);
+    }));
+    const destY = wayTapY + DEV_GAP + chain + 46;
     const H = destY + DEST_H + MARGIN;
 
     const out = [];
@@ -891,34 +903,34 @@
         const wx = left + i * (WAY_W + WAY_GAP) + WAY_W / 2;
         out.push(`<circle cx="${wx}" cy="${busY}" r="4.5" fill="${C.bus}"/>`);
         out.push(`<line x1="${wx}" y1="${busY}" x2="${wx}" y2="${destY}" stroke="${C.line}" stroke-width="2.5"/>`);
+        const head = way.devices[0];
+        const headIsSwitch = head && head.kind === 'switchgear';
         out.push(hvBreaker(wx, wayTapY, C.line));
-        out.push(hvTag(wx - 15, wayTapY + 26, way.name, C.label, 12));
+        out.push(hvTag(wx - 15, wayTapY + 26, (headIsSwitch && head.name) || way.name, C.label, 12));
         if (way.rating_a) out.push(`<text x="${wx + 18}" y="${wayTapY + 5}" font-size="11" fill="${C.muted}">${fmtA(way.rating_a)} A</text>`);
-
-        const prot = PROT_LABEL[way.protection];
-        if (prot) {
-          out.push(`<g class="hv-node"><title>${esc(prot)}${way.protection_note ? ' · ' + esc(way.protection_note) : ''}</title>
-            <rect x="${wx - 34}" y="${protY - 15}" width="68" height="30" rx="7" fill="#fffaf0" stroke="${C.prot}" stroke-width="2"/>
-            <text x="${wx}" y="${protY + 5}" text-anchor="middle" font-size="12" font-weight="700" fill="${C.prot}">${esc(prot)}</text>
-          </g>`);
+        if (headIsSwitch && canEdit()) {
+          out.push(`<g class="sld-btn" data-action="hv-edit-device" data-id="${head.id}"><title>Edit ${esc(head.name || 'switchgear')}</title>
+            <rect x="${wx + 62}" y="${wayTapY - 12}" width="22" height="22" rx="6" fill="#fff" stroke="${C.line}" stroke-opacity=".3"/>
+            <g transform="translate(${wx + 63} ${wayTapY - 11})" fill="none" stroke="${C.line}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${SLD_ICONS.edit}</g></g>`);
         }
-        if (way.has_transformer) {
-          // The two overlapping rings that mean a transformer on any drawing.
-          out.push(`<g class="hv-node"><title>${esc(way.transformer_name || 'Transformer')}${way.transformer_kva ? ' · ' + fmtA(way.transformer_kva) + ' kVA' : ''}${way.transformer_ratio ? ' · ' + esc(way.transformer_ratio) : ''}</title>
-            <rect x="${wx - 17}" y="${txY - 26}" width="34" height="52" fill="#fff"/>
-            <circle cx="${wx}" cy="${txY - 9}" r="16" fill="none" stroke="${C.tx}" stroke-width="2.5"/>
-            <circle cx="${wx}" cy="${txY + 9}" r="16" fill="none" stroke="${C.tx}" stroke-width="2.5"/>
-            <text x="${wx + 24}" y="${txY - 2}" font-size="11" font-weight="700" fill="${C.tx}">${esc(way.transformer_name || 'TX')}</text>
-            ${way.transformer_kva ? `<text x="${wx + 24}" y="${txY + 12}" font-size="10" fill="${C.muted}">${fmtA(way.transformer_kva)} kVA</text>` : ''}
-            ${way.transformer_ratio ? `<text x="${wx + 24}" y="${txY + 25}" font-size="10" fill="${C.muted}">${esc(way.transformer_ratio)}</text>` : ''}
-          </g>`);
+
+        // Everything fitted on the way, drawn in order down the conductor.
+        let y = wayTapY + DEV_GAP;
+        way.devices.forEach((dev, di) => {
+          if (di === 0 && dev.kind === 'switchgear') return;   // already drawn at the tap
+          out.push(hvDevice(wx, y, dev));
+          y += devHeight(dev);
+        });
+        if (canEdit()) {
+          out.push(sldPill(wx, destY - 26, 34, '+', `data-action="hv-add-device" data-way="${way.id}"`, C.line, 'Fit another device on this way'));
         }
 
         // The destination box: what this way actually feeds.
         const linked = !!way.dest_board_id;
         const dcol = linked ? C.dest : C.muted;
         const label = way.dest_label || way.dest_board_code || 'Not assigned';
-        const sub = linked ? (way.dest_building_name || 'Open on the dashboard') : (way.dest_label ? 'External' : 'Set a destination');
+        const sub = linked ? (way.dest_building_name || 'Open on the dashboard')
+          : (way.dest_label ? 'External' : 'Set a destination');
         // A linked box opens its board for anyone; an unlinked one is only a
         // shortcut to fill in the destination, so it is inert for a viewer.
         const destAct = linked ? `data-action="hv-open-dest" data-id="${way.dest_board_id}"`
@@ -977,6 +989,49 @@
       if (!text) return '';
       return `<text x="${x}" y="${y}" transform="rotate(-90 ${x} ${y})" text-anchor="start"
         font-size="${size || 12}" font-weight="700" fill="${col}" letter-spacing=".5">${esc(text)}</text>`;
+    }
+
+    // One device on a way: its symbol, its designation up the side, and the
+    // controls to edit, remove, reorder or add another after it.
+    function hvDevice(cx, cy, d) {
+      const g = [];
+      const kind = d.kind;
+      const col = kind === 'transformer' ? C.tx : (['rccb', 'elr', 'elcb'].includes(kind) ? C.prot : C.line);
+      const label = (DEVICE_LABEL[kind] || kind).toUpperCase();
+      if (kind === 'transformer') {
+        g.push(`<rect x="${cx - 17}" y="${cy - 26}" width="34" height="52" fill="#fff"/>
+          <circle cx="${cx}" cy="${cy - 9}" r="16" fill="none" stroke="${col}" stroke-width="2.5"/>
+          <circle cx="${cx}" cy="${cy + 9}" r="16" fill="none" stroke="${col}" stroke-width="2.5"/>`);
+        if (d.kva) g.push(`<text x="${cx + 24}" y="${cy - 2}" font-size="10" fill="${C.muted}">${fmtA(d.kva)} kVA</text>`);
+        if (d.ratio) g.push(`<text x="${cx + 24}" y="${cy + 11}" font-size="10" fill="${C.muted}">${esc(d.ratio)}</text>`);
+      } else if (kind === 'switchgear') {
+        g.push(hvBreaker(cx, cy, col));
+      } else if (kind === 'isolator') {
+        // An isolator is drawn as a blade swung off the conductor.
+        g.push(`<rect x="${cx - 12}" y="${cy - 16}" width="24" height="32" fill="#fff"/>
+          <circle cx="${cx}" cy="${cy + 12}" r="3" fill="${col}"/>
+          <line x1="${cx}" y1="${cy + 12}" x2="${cx + 13}" y2="${cy - 13}" stroke="${col}" stroke-width="2.5" stroke-linecap="round"/>`);
+      } else if (kind === 'fuse') {
+        g.push(`<rect x="${cx - 9}" y="${cy - 15}" width="18" height="30" rx="2" fill="#fff" stroke="${col}" stroke-width="2.5"/>`);
+      } else if (kind === 'meter') {
+        g.push(`<circle cx="${cx}" cy="${cy}" r="14" fill="#fff" stroke="${col}" stroke-width="2.5"/>
+          <text x="${cx}" y="${cy + 5}" text-anchor="middle" font-size="12" font-weight="700" fill="${col}">M</text>`);
+      } else {
+        g.push(`<rect x="${cx - 34}" y="${cy - 15}" width="68" height="30" rx="7" fill="#fffaf0" stroke="${col}" stroke-width="2"/>
+          <text x="${cx}" y="${cy + 5}" text-anchor="middle" font-size="12" font-weight="700" fill="${col}">${esc(label)}</text>`);
+      }
+      if (d.name) g.push(hvTag(cx - 15, cy + 22, d.name, C.label, 11));
+      const title = `${label}${d.name ? ' ' + d.name : ''}${d.notes ? ' · ' + d.notes : ''}`;
+      let inner = `<g class="${canEdit() ? 'hv-node' : ''}" ${canEdit() ? `data-action="hv-edit-device" data-id="${d.id}"` : ''}>
+        <title>${esc(title)}${canEdit() ? ' - click to change or remove' : ''}</title>
+        <rect x="${cx - 40}" y="${cy - 26}" width="80" height="52" fill="transparent"/>${g.join('')}</g>`;
+      if (canEdit()) {
+        inner += `<g class="sld-btn" data-action="hv-add-device" data-way="${d.way_id}" data-after="${d.id}">
+          <title>Fit another device below this one</title>
+          <rect x="${cx + 74}" y="${cy - 11}" width="22" height="22" rx="6" fill="#fff" stroke="${C.line}" stroke-opacity=".3"/>
+          <text x="${cx + 85}" y="${cy + 5}" text-anchor="middle" font-size="15" font-weight="700" fill="${C.line}">+</text></g>`;
+      }
+      return inner;
     }
 
     function hvBreaker(cx, cy, col) {
@@ -1053,6 +1108,7 @@
         <div class="form-error" id="form-error"></div>
         <div class="form-actions">
           ${opts.deleteLabel ? `<button type="button" class="btn btn-danger left" data-act="delete">${esc(opts.deleteLabel)}</button>` : ''}
+          ${opts.extra || ''}
           <button type="button" class="btn" data-close>Cancel</button>
           <button type="submit" class="btn btn-primary">${esc(opts.submitLabel || 'Save')}</button>
         </div>
@@ -1276,34 +1332,20 @@
     const feeders = state.hv.feeders;
     const boards = state.hvBoards || [];
     const parent = feeders.find(f => f.id === (isEdit ? way.feeder_id : Number(feederId))) || feeders[0];
-    const form = formModal(isEdit ? 'Edit way ' + way.name : 'Add way to ' + (parent ? parent.name : 'feeder'), `
+    formModal(isEdit ? 'Edit way ' + way.name : 'Add way to ' + (parent ? parent.name : 'feeder'), `
       ${field('Fed from', 'feeder_id', parent ? parent.id : '', { type: 'select', required: true, options: feeders.map(f => ({ value: f.id, label: f.name + ' · ' + f.voltage })) })}
-      ${field('Way name', 'name', isEdit ? way.name : hvNextWayName(parent), { required: true, placeholder: 'W1' })}
+      ${field('Way name', 'name', isEdit ? way.name : hvNextWayName(parent), { required: true, placeholder: '22SG05' })}
       ${field('Rating (A)', 'rating_a', isEdit && way.rating_a != null ? way.rating_a : '', { type: 'number', attrs: 'min="0" max="100000" step="any"', hint: 'Optional' })}
-      ${field('Protection', 'protection', isEdit ? way.protection : 'none', { type: 'select', options: [
-        { value: 'none', label: 'None' }, { value: 'rccb', label: 'RCCB' }, { value: 'elr', label: 'ELR' }, { value: 'elcb', label: 'ELCB' }] })}
-      ${field('Protection note', 'protection_note', isEdit ? way.protection_note : '', { placeholder: 'e.g. 300 mA, 0.5 s' })}
-      <div class="field inline full"><input type="checkbox" name="has_transformer" id="has_tx" ${isEdit && way.has_transformer ? 'checked' : ''}><label for="has_tx">Fit a transformer on this way</label></div>
-      <div class="full" id="tx-fields" ${isEdit && way.has_transformer ? '' : 'hidden'}>
-        <div class="form-grid">
-          ${field('Transformer name', 'transformer_name', isEdit ? way.transformer_name : '', { placeholder: 'TX-1' })}
-          ${field('Rating (kVA)', 'transformer_kva', isEdit && way.transformer_kva != null ? way.transformer_kva : '', { type: 'number', attrs: 'min="0" max="1000000" step="any"' })}
-          ${field('Ratio', 'transformer_ratio', isEdit ? way.transformer_ratio : '', { full: true, placeholder: '22kV / 400V' })}
-        </div>
-      </div>
       ${field('Feeds board', 'dest_board_id', isEdit && way.dest_board_id ? way.dest_board_id : '', { type: 'select', full: true,
         options: [{ value: '', label: '— not a board in this system —' }].concat(boards.map(b => ({ value: b.id, label: b.code + ' · ' + b.building_name }))),
         hint: 'Linking a board makes the destination box clickable.' })}
       ${field('Or destination label', 'dest_label', isEdit ? way.dest_label : '', { full: true, placeholder: 'e.g. FAC1/PE1, used when it is not a board here' })}
-      ${field('Notes', 'notes', isEdit ? way.notes : '', { type: 'textarea', full: true })}`,
+      ${field('Notes', 'notes', isEdit ? way.notes : '', { type: 'textarea', full: true })}
+      ${isEdit ? `<p class="field full hint" style="margin:0">What is fitted on this way is set on the diagram: the <b>+</b> beside a device adds another below it, and clicking a device changes or removes it.</p>` : ''}`,
       async d => {
         const body = {
           feeder_id: Number(d.feeder_id), name: d.name,
           rating_a: d.rating_a === '' ? null : Number(d.rating_a),
-          protection: d.protection, protection_note: d.protection_note,
-          has_transformer: d.has_transformer === 'on',
-          transformer_name: d.transformer_name || '', transformer_ratio: d.transformer_ratio || '',
-          transformer_kva: d.transformer_kva ? Number(d.transformer_kva) : null,
           dest_board_id: d.dest_board_id ? Number(d.dest_board_id) : null,
           dest_label: d.dest_label || '', notes: d.notes || '',
         };
@@ -1311,10 +1353,67 @@
         else { const r = await api('POST', '/api/hv/ways', body); state.focus = 'hv-way-' + r.id; await afterChange('Way added'); }
       },
       isEdit && canManage() ? { wide: true, deleteLabel: 'Delete way', onDelete: () => hvDeleteWay(way) } : { wide: true });
-    // The transformer detail only matters once one is fitted.
-    const box = $('#has_tx', form), fields = $('#tx-fields', form);
-    box.addEventListener('change', () => { fields.hidden = !box.checked; });
   }
+
+  // ---- devices fitted on a way
+  function hvDeviceForm(dev, wayId, afterId) {
+    const isEdit = !!(dev && dev.id);
+    const kinds = Object.entries(DEVICE_LABEL).map(([value, label]) => ({ value, label }));
+    const kind = isEdit ? dev.kind : 'rccb';
+    const form = formModal(isEdit ? 'Edit ' + (DEVICE_LABEL[dev.kind] || dev.kind) : 'Fit a device', `
+      ${field('Device', 'kind', kind, { type: 'select', required: true, full: true, options: kinds })}
+      ${field('Designation', 'name', isEdit ? dev.name : '', { placeholder: 'e.g. 22SG05, TX05', hint: 'Written up the side of the symbol.' })}
+      ${field('Rating (A)', 'rating_a', isEdit && dev.rating_a != null ? dev.rating_a : '', { type: 'number', attrs: 'min="0" max="100000" step="any"' })}
+      <div class="full" id="tx-fields" ${kind === 'transformer' ? '' : 'hidden'}>
+        <div class="form-grid">
+          ${field('Rating (kVA)', 'kva', isEdit && dev.kva != null ? dev.kva : '', { type: 'number', attrs: 'min="0" max="1000000" step="any"' })}
+          ${field('Ratio', 'ratio', isEdit ? dev.ratio : '', { placeholder: '22kV / 400V' })}
+        </div>
+      </div>
+      ${field('Notes', 'notes', isEdit ? dev.notes : '', { full: true, placeholder: 'e.g. 300 mA, 0.5 s' })}`,
+      async d => {
+        const body = {
+          kind: d.kind, name: d.name || '', notes: d.notes || '', ratio: d.ratio || '',
+          rating_a: d.rating_a === '' ? null : Number(d.rating_a),
+          kva: d.kva ? Number(d.kva) : null,
+        };
+        if (isEdit) { await api('PUT', '/api/hv/devices/' + dev.id, body); await afterChange('Device updated'); }
+        else {
+          body.way_id = Number(wayId);
+          if (afterId) body.after_id = Number(afterId);
+          await api('POST', '/api/hv/devices', body);
+          await afterChange('Device fitted');
+        }
+      },
+      isEdit ? {
+        deleteLabel: 'Remove', onDelete: () => hvDeleteDevice(dev),
+        extra: `<button type="button" class="btn btn-sm" data-act="up" title="Move up the way">↑</button>
+                <button type="button" class="btn btn-sm" data-act="down" title="Move down the way">↓</button>`,
+      } : {});
+    // The transformer figures only apply to a transformer.
+    const sel = $('[name=kind]', form), tx = $('#tx-fields', form);
+    sel.addEventListener('change', () => { tx.hidden = sel.value !== 'transformer'; });
+    if (isEdit) {
+      $$('[data-act=up], [data-act=down]', form).forEach(btn => btn.addEventListener('click', async () => {
+        try {
+          await api('POST', '/api/hv/devices/' + dev.id + '/move', { delta: btn.dataset.act === 'up' ? -1 : 1 });
+          closeModal();
+          await afterChange('Device moved');
+        } catch (e) { $('#form-error', form).textContent = e.message; }
+      }));
+    }
+  }
+  function hvDeleteDevice(dev) {
+    confirmModal('Remove device', `Remove the <b>${esc(DEVICE_LABEL[dev.kind] || dev.kind)}</b>${dev.name ? ' <b>' + esc(dev.name) + '</b>' : ''} from this way? Everything below it stays where it is.`,
+      async () => { await api('DELETE', '/api/hv/devices/' + dev.id); await afterChange('Device removed'); }, 'Remove');
+  }
+  function hvFindDevice(id) {
+    for (const f of state.hv.feeders || []) {
+      for (const w of f.ways) { const d = (w.devices || []).find(x => x.id === id); if (d) return d; }
+    }
+    return null;
+  }
+
   function hvNextWayName(feeder) {
     const used = new Set(((feeder && feeder.ways) || []).map(w => w.name.toUpperCase()));
     for (let i = 1; i < 200; i++) { const n = 'W' + i; if (!used.has(n)) return n; }
@@ -1525,6 +1624,8 @@
       case 'hv-edit-feeder': if (canManage()) hvFeederForm(hvFindFeeder(id)); break;
       case 'hv-add-way': hvWayForm(null, id); break;
       case 'hv-edit-way': if (canEdit()) hvWayForm(hvFindWay(id)); break;
+      case 'hv-add-device': if (canEdit()) hvDeviceForm(null, el.dataset.way, el.dataset.after); break;
+      case 'hv-edit-device': if (canEdit()) hvDeviceForm(hvFindDevice(id)); break;
       case 'hv-add-coupler': hvCouplerForm(null); break;
       case 'hv-edit-coupler': if (canManage()) hvCouplerForm(hvFindCoupler(id)); break;
       case 'hv-open-dest': navigate(boardHash('dashboard', id)); break;

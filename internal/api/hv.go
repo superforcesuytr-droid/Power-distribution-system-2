@@ -24,6 +24,11 @@ func (s *Server) routesHV(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/hv/ways/{id}", s.requireRole(model.RoleTechnician, s.handleHVWayUpdate))
 	mux.HandleFunc("DELETE /api/hv/ways/{id}", s.requireRole(model.RoleSupervisor, s.handleHVWayDelete))
 
+	mux.HandleFunc("POST /api/hv/devices", s.requireRole(model.RoleTechnician, s.handleHVDeviceCreate))
+	mux.HandleFunc("PUT /api/hv/devices/{id}", s.requireRole(model.RoleTechnician, s.handleHVDeviceUpdate))
+	mux.HandleFunc("DELETE /api/hv/devices/{id}", s.requireRole(model.RoleTechnician, s.handleHVDeviceDelete))
+	mux.HandleFunc("POST /api/hv/devices/{id}/move", s.requireRole(model.RoleTechnician, s.handleHVDeviceMove))
+
 	mux.HandleFunc("POST /api/hv/couplers", s.requireRole(model.RoleSupervisor, s.handleHVCouplerCreate))
 	mux.HandleFunc("PUT /api/hv/couplers/{id}", s.requireRole(model.RoleSupervisor, s.handleHVCouplerUpdate))
 	mux.HandleFunc("DELETE /api/hv/couplers/{id}", s.requireRole(model.RoleSupervisor, s.handleHVCouplerDelete))
@@ -191,14 +196,6 @@ type hvWayInput struct {
 	Name     string   `json:"name"`
 	RatingA  *float64 `json:"rating_a"`
 
-	Protection     string `json:"protection"`
-	ProtectionNote string `json:"protection_note"`
-
-	HasTransformer   bool     `json:"has_transformer"`
-	TransformerName  string   `json:"transformer_name"`
-	TransformerKVA   *float64 `json:"transformer_kva"`
-	TransformerRatio string   `json:"transformer_ratio"`
-
 	DestBoardID *int64 `json:"dest_board_id"`
 	DestLabel   string `json:"dest_label"`
 	Notes       string `json:"notes"`
@@ -207,32 +204,17 @@ type hvWayInput struct {
 func (in hvWayInput) toModel(id int64) (model.HVWay, error) {
 	w := model.HVWay{
 		ID: id, FeederID: in.FeederID,
-		Name:             strings.TrimSpace(in.Name),
-		RatingA:          in.RatingA,
-		Protection:       strings.ToLower(strings.TrimSpace(in.Protection)),
-		ProtectionNote:   strings.TrimSpace(in.ProtectionNote),
-		HasTransformer:   in.HasTransformer,
-		TransformerName:  strings.TrimSpace(in.TransformerName),
-		TransformerKVA:   in.TransformerKVA,
-		TransformerRatio: strings.TrimSpace(in.TransformerRatio),
-		DestBoardID:      in.DestBoardID,
-		DestLabel:        strings.TrimSpace(in.DestLabel),
-		Notes:            strings.TrimSpace(in.Notes),
+		Name:        strings.TrimSpace(in.Name),
+		RatingA:     in.RatingA,
+		DestBoardID: in.DestBoardID,
+		DestLabel:   strings.TrimSpace(in.DestLabel),
+		Notes:       strings.TrimSpace(in.Notes),
 	}
 	if err := required("Way name", w.Name); err != nil {
 		return w, err
 	}
-	if w.Protection == "" {
-		w.Protection = model.ProtectionNone
-	}
-	if !model.ValidProtection(w.Protection) {
-		return w, &db.UserError{Msg: "Protection must be none, RCCB, ELR or ELCB."}
-	}
 	if w.RatingA != nil && (*w.RatingA <= 0 || *w.RatingA > 100000) {
 		return w, &db.UserError{Msg: "Rating must be between 0 and 100000 A."}
-	}
-	if w.TransformerKVA != nil && (*w.TransformerKVA <= 0 || *w.TransformerKVA > 1000000) {
-		return w, &db.UserError{Msg: "Transformer rating must be between 0 and 1000000 kVA."}
 	}
 	// A destination board carries its own name, so a separate label would only
 	// contradict it.
@@ -398,6 +380,124 @@ func (s *Server) handleHVCouplerDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Store.DeleteHVCoupler(ctx(r), roleOf(r), id); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+// Devices ------------------------------------------------------------------
+
+type hvDeviceInput struct {
+	WayID   int64    `json:"way_id"`
+	AfterID int64    `json:"after_id"`
+	Kind    string   `json:"kind"`
+	Name    string   `json:"name"`
+	RatingA *float64 `json:"rating_a"`
+	KVA     *float64 `json:"kva"`
+	Ratio   string   `json:"ratio"`
+	Notes   string   `json:"notes"`
+}
+
+func (in hvDeviceInput) toModel(id int64) (model.HVDevice, error) {
+	d := model.HVDevice{
+		ID: id, WayID: in.WayID,
+		Kind:    strings.ToLower(strings.TrimSpace(in.Kind)),
+		Name:    strings.TrimSpace(in.Name),
+		RatingA: in.RatingA,
+		KVA:     in.KVA,
+		Ratio:   strings.TrimSpace(in.Ratio),
+		Notes:   strings.TrimSpace(in.Notes),
+	}
+	if !model.ValidDeviceKind(d.Kind) {
+		return d, &db.UserError{Msg: "Choose what kind of device this is."}
+	}
+	if d.RatingA != nil && (*d.RatingA <= 0 || *d.RatingA > 100000) {
+		return d, &db.UserError{Msg: "Rating must be between 0 and 100000 A."}
+	}
+	if d.KVA != nil && (*d.KVA <= 0 || *d.KVA > 1000000) {
+		return d, &db.UserError{Msg: "Transformer rating must be between 0 and 1000000 kVA."}
+	}
+	return d, nil
+}
+
+func (s *Server) handleHVDeviceCreate(w http.ResponseWriter, r *http.Request) {
+	var in hvDeviceInput
+	if err := decode(r, &in); err != nil {
+		fail(w, err)
+		return
+	}
+	d, err := in.toModel(0)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if d.WayID <= 0 {
+		fail(w, &db.UserError{Msg: "Way is required."})
+		return
+	}
+	id, err := s.Store.CreateHVDevice(ctx(r), roleOf(r), d, in.AfterID)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 201, map[string]int64{"id": id})
+}
+
+func (s *Server) handleHVDeviceUpdate(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	var in hvDeviceInput
+	if err := decode(r, &in); err != nil {
+		fail(w, err)
+		return
+	}
+	d, err := in.toModel(id)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if err := s.Store.UpdateHVDevice(ctx(r), roleOf(r), d); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+func (s *Server) handleHVDeviceDelete(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if err := s.Store.DeleteHVDevice(ctx(r), roleOf(r), id); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+func (s *Server) handleHVDeviceMove(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	var in struct {
+		Delta int `json:"delta"`
+	}
+	if err := decode(r, &in); err != nil {
+		fail(w, err)
+		return
+	}
+	if in.Delta != 1 && in.Delta != -1 {
+		fail(w, &db.UserError{Msg: "Move one place at a time."})
+		return
+	}
+	if err := s.Store.MoveHVDevice(ctx(r), roleOf(r), id, in.Delta); err != nil {
 		fail(w, err)
 		return
 	}

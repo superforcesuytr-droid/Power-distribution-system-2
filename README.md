@@ -23,9 +23,11 @@ The single line diagram is drawn from the same data and can be edited directly:
   level.
 - **HV Overview** - the site-wide 22 kV picture above the boards: incoming
   feeders on one continuous busbar, bus couplers that split it into sections,
-  and the outgoing ways from each feeder's switchgear. A way can carry an RCCB,
-  ELR or ELCB, pass through a transformer, and land on a destination box that
-  opens the board it feeds. Everything on it is editable in place.
+  and the outgoing ways from each feeder's switchgear. A way carries whatever is
+  fitted on it, in whatever order: further switchgear, isolators, RCCBs, ELRs,
+  ELCBs, transformers, fuses and meters, each one added below any other, moved
+  along the way or removed. Every way lands on a destination box that opens the
+  board it feeds. Everything on it is editable in place.
 - **Zoom on both diagrams** - buttons for in, out, fit and actual size, Ctrl or
   Cmd with the scroll wheel to zoom about the pointer, and drag to pan. Each
   diagram remembers its own zoom.
@@ -228,8 +230,9 @@ build/                   build scripts, Windows icon/version resources, macOS bu
 buildings ─< boards ─< mccbs ─< mcbs ─< circuits
                                           audit_log, app_settings
 
-hv_networks ─< hv_feeders ─< hv_ways ─> boards   (the destination a way feeds)
-            ─< hv_couplers ─> hv_feeders         (the two sections it ties)
+hv_networks ─< hv_feeders ─< hv_ways ─< hv_devices  (what is fitted on a way)
+                                     ─> boards      (the destination it feeds)
+            ─< hv_couplers ─> hv_feeders            (the two sections it ties)
 ```
 
 - Every breaker has a rated current; **capacity** = rating × capacity factor.
