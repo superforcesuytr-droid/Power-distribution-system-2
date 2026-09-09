@@ -311,6 +311,10 @@ table.grid td.bar-cell .bar { width: 90px; display: inline-block; vertical-align
   border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; overflow: auto;
 }
 .sld-canvas svg { display: block; margin: 0 auto; max-width: 100%; height: auto; font-family: var(--mono); }
+/* Given room to spare the drawing sits in the middle of it rather than pinned
+   to the top with the dotted ground below it. */
+.sld-canvas { display: flex; flex-direction: column; justify-content: safe center; }
+.sld-canvas > * { flex: 0 0 auto; }
 .sld-canvas { cursor: grab; }
 .sld-canvas.grabbing { cursor: grabbing; user-select: none; }
 .palette { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }

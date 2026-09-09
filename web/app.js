@@ -517,7 +517,7 @@
   // Both diagrams are one SVG with a viewBox, so scaling is a matter of the
   // width it is rendered at; the canvas around it scrolls. That keeps text
   // crisp at any zoom, which a bitmap scale would not.
-  const ZOOM_MIN = 0.25, ZOOM_MAX = 3;
+  const ZOOM_MIN = 0.25, ZOOM_MAX = 3, CANVAS_MIN_H = 360;
 
   function zoomBar() {
     return `<div class="zoom-bar">
@@ -530,9 +530,31 @@
     </div>`;
   }
 
+  // The canvas takes whatever is left of the window rather than only as much
+  // as the drawing needs, so a wide diagram has the whole screen to be read in
+  // instead of a band across the top with the page empty underneath.
+  let canvasFillBound = false;
+  const canvasScroll = {};
+  function fillCanvas() {
+    const canvas = $('#diagram-canvas');
+    if (!canvas) return;
+    if (!canvasFillBound) {
+      canvasFillBound = true;
+      window.addEventListener('resize', fillCanvas);
+    }
+    const top = canvas.getBoundingClientRect().top + window.scrollY;
+    const want = Math.max(CANVAS_MIN_H, window.innerHeight - top - 24);
+    canvas.style.height = want + 'px';
+    // Give back whatever now hangs below the window, so the page itself does
+    // not gain a scrollbar on top of the one inside the canvas.
+    const over = document.documentElement.scrollHeight - window.innerHeight;
+    if (over > 0 && want - over >= CANVAS_MIN_H) canvas.style.height = (want - over) + 'px';
+  }
+
   function mountZoom(key) {
     const canvas = $('#diagram-canvas'), svg = canvas && $('svg', canvas);
     if (!svg) return;
+    fillCanvas();
     const baseW = (svg.viewBox && svg.viewBox.baseVal && svg.viewBox.baseVal.width) || svg.getBoundingClientRect().width;
     if (!baseW) return;
     const store = 'pds.zoom.' + key;
@@ -552,6 +574,14 @@
     let saved = 0;
     try { saved = Number(localStorage.getItem(store)) || 0; } catch (_) { /* ignore */ }
     apply(saved || fitZoom());
+
+    // Editing the diagram redraws it, and on a wide one that would otherwise
+    // throw the view back to the far left, away from what was just changed.
+    const keep = canvasScroll[key];
+    if (keep) { canvas.scrollLeft = keep[0]; canvas.scrollTop = keep[1]; }
+    canvas.addEventListener('scroll', () => {
+      canvasScroll[key] = [canvas.scrollLeft, canvas.scrollTop];
+    }, { passive: true });
 
     $$('[data-zoom]', canvas.parentNode).forEach(btn => btn.addEventListener('click', () => {
       const what = btn.dataset.zoom;
@@ -810,7 +840,7 @@
             <div><div class="n">${net.linked_count}</div><div class="l">Linked</div></div>
           </div>
         </div>
-        ${canEdit() ? `<p class="sld-hint">Click any destination box to jump to that board. <b>+ Way</b> adds an outgoing way to a bus section, which every feeder on that section backs. On a way, the <b>+</b> beside a device fits another one below it, and clicking a device changes, reorders or removes it. To rearrange the bar, take hold of a way or a feeder by the dot where it meets the busbar and slide it left or right - the rest open a gap and it snaps into place.</p>` : ''}
+        ${canEdit() ? `<p class="sld-hint">Click a destination box to open that board. <b>+ Way</b> taps a bus section, which every feeder on it backs. On a way, <b>+</b> fits a device below and clicking one changes or removes it. To rearrange the bar, take a way or feeder by its dot on the busbar and slide it left or right.</p>` : ''}
         <div class="hv-toolbar">
           ${canManage() ? '<button class="btn btn-primary" data-action="hv-add-section">+ Add bus section</button>' : ''}
           ${canManage() && net.sections.length > 1 ? '<button class="btn" data-action="hv-add-coupler">+ Add coupler</button>' : ''}
