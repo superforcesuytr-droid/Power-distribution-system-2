@@ -818,7 +818,9 @@
   }
 
   function hvSVG(net) {
-    const C = { bus: '#0b74c4', line: '#334155', tx: '#7c3aed', prot: '#d97a06', dest: '#0f8a4f', muted: '#94a3b8' };
+    // `label` is for text that has to be read at a glance, `muted` for the
+    // secondary figures beside a symbol.
+    const C = { bus: '#0b74c4', line: '#334155', tx: '#7c3aed', prot: '#d97a06', dest: '#0f8a4f', muted: '#94a3b8', label: '#475569' };
     const WAY_W = 150, WAY_GAP = 16, FEEDER_GAP = 90, MARGIN = 44;
     const MIN_FEEDER_W = 250;
 
@@ -861,7 +863,7 @@
       const f = g.f, cx = centers[gi];
       // The X is the switchgear, not a symbol wired to a box: its name sits
       // beside it, and both the symbol and the name open its settings.
-      out.push(`<text x="${cx}" y="${feederY}" text-anchor="middle" font-size="11" fill="${C.muted}" letter-spacing="1.2">${esc(f.voltage)}${f.source ? ' · ' + esc(f.source).toUpperCase() : ''}</text>`);
+      out.push(`<text x="${cx}" y="${feederY}" text-anchor="middle" font-size="13" font-weight="600" fill="${C.label}" letter-spacing="1">${esc(f.voltage)}${f.source ? ' · ' + esc(f.source).toUpperCase() : ''}</text>`);
       out.push(`<line x1="${cx}" y1="${feederY + 12}" x2="${cx}" y2="${busY}" stroke="${C.bus}" stroke-width="3"/>`);
       const swAct = canManage() ? `data-action="hv-edit-feeder" data-id="${f.id}"` : '';
       const nameEnd = cx + 24 + Math.max(28, f.name.length * 11);
