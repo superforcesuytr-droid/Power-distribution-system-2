@@ -11,9 +11,9 @@ import (
 	"github.com/superforcesuytr-droid/power-distribution-system/internal/model"
 )
 
-// HVNetwork loads the whole high-voltage overview: the busbar sections in
-// order, the feeders backing each and the ways tapping it, and the couplers
-// between sections.
+// HVNetwork loads the whole high-voltage overview: the switchboards top to
+// bottom, the bus sections each is split into, the feeders backing each
+// section and the ways tapping it, and the couplers between sections.
 func (s *Store) HVNetwork(ctx context.Context) (*model.HVNetwork, error) {
 	pool, err := s.getPool()
 	if err != nil {
@@ -28,65 +28,93 @@ func (s *Store) HVNetwork(ctx context.Context) (*model.HVNetwork, error) {
 		}
 		return nil, err
 	}
-	n.Sections = []model.HVSection{}
-	n.Couplers = []model.HVCoupler{}
+	n.Switchboards = []model.HVSwitchboard{}
 
+	// Everything is read flat and assembled at the end, so a device only ever
+	// has to find its own way or feeder rather than an index into a tree.
+	boardAt := map[int64]int{}
+	brows, err := pool.Query(ctx, `SELECT id, network_id, name, voltage, phases, frequency,
+		current_a, fault_ka, position, created_at, updated_at
+		FROM hv_switchboards WHERE network_id = $1 ORDER BY position, id`, n.ID)
+	if err != nil {
+		return nil, err
+	}
+	for brows.Next() {
+		var b model.HVSwitchboard
+		if err := brows.Scan(&b.ID, &b.NetworkID, &b.Name, &b.Voltage, &b.Phases, &b.Frequency,
+			&b.CurrentA, &b.FaultKA, &b.Position, &b.CreatedAt, &b.UpdatedAt); err != nil {
+			brows.Close()
+			return nil, err
+		}
+		b.Sections = []model.HVSection{}
+		b.Couplers = []model.HVCoupler{}
+		boardAt[b.ID] = len(n.Switchboards)
+		n.Switchboards = append(n.Switchboards, b)
+	}
+	brows.Close()
+	if err := brows.Err(); err != nil {
+		return nil, err
+	}
+
+	var sections []model.HVSection
 	secAt := map[int64]int{}
-	srows, err := pool.Query(ctx, `SELECT id, network_id, name, position FROM hv_sections
+	srows, err := pool.Query(ctx, `SELECT id, network_id, switchboard_id, name, position FROM hv_sections
 		WHERE network_id = $1 ORDER BY position, id`, n.ID)
 	if err != nil {
 		return nil, err
 	}
 	for srows.Next() {
 		var sec model.HVSection
-		if err := srows.Scan(&sec.ID, &sec.NetworkID, &sec.Name, &sec.Position); err != nil {
+		if err := srows.Scan(&sec.ID, &sec.NetworkID, &sec.SwitchboardID, &sec.Name, &sec.Position); err != nil {
 			srows.Close()
 			return nil, err
 		}
 		sec.Feeders = []model.HVFeeder{}
 		sec.Ways = []model.HVWay{}
-		secAt[sec.ID] = len(n.Sections)
-		n.Sections = append(n.Sections, sec)
+		secAt[sec.ID] = len(sections)
+		sections = append(sections, sec)
 	}
 	srows.Close()
 	if err := srows.Err(); err != nil {
 		return nil, err
 	}
 
-	feederAt := map[int64][2]int{}
-	rows, err := pool.Query(ctx, `SELECT id, network_id, coalesce(section_id, 0), name, switchgear, voltage, source,
-		rating_a, position, created_at, updated_at
+	var feeders []model.HVFeeder
+	feederAt := map[int64]int{}
+	rows, err := pool.Query(ctx, `SELECT id, network_id, coalesce(section_id, 0), name, switchgear, kind,
+		voltage, source, rating_a, position, created_at, updated_at
 		FROM hv_feeders WHERE network_id = $1 ORDER BY position, name`, n.ID)
 	if err != nil {
 		return nil, err
 	}
 	for rows.Next() {
 		var f model.HVFeeder
-		if err := rows.Scan(&f.ID, &f.NetworkID, &f.SectionID, &f.Name, &f.Switchgear, &f.Voltage, &f.Source,
-			&f.RatingA, &f.Position, &f.CreatedAt, &f.UpdatedAt); err != nil {
+		if err := rows.Scan(&f.ID, &f.NetworkID, &f.SectionID, &f.Name, &f.Switchgear, &f.Kind,
+			&f.Voltage, &f.Source, &f.RatingA, &f.Position, &f.CreatedAt, &f.UpdatedAt); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		f.Devices = []model.HVDevice{}
-		if i, ok := secAt[f.SectionID]; ok {
-			n.Sections[i].Feeders = append(n.Sections[i].Feeders, f)
-			feederAt[f.ID] = [2]int{i, len(n.Sections[i].Feeders) - 1}
-		}
+		feederAt[f.ID] = len(feeders)
+		feeders = append(feeders, f)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
-	// Ways, with the destination board resolved so the diagram can link to it.
-	wayAt := map[int64][2]int{}
+	// Ways, with the destination resolved so the diagram can link to it.
+	var ways []model.HVWay
+	wayAt := map[int64]int{}
 	wrows, err := pool.Query(ctx, `SELECT w.id, coalesce(w.section_id, 0), w.name, w.rating_a,
-		w.dest_board_id, w.dest_label, w.dest_detail, w.notes, w.position, w.created_at, w.updated_at,
-		coalesce(bo.code, ''), coalesce(b.name, '')
+		w.dest_board_id, w.dest_switchboard_id, w.dest_label, w.dest_detail, w.notes, w.position,
+		w.created_at, w.updated_at,
+		coalesce(bo.code, ''), coalesce(b.name, ''), coalesce(sb.name, '')
 		FROM hv_ways w
 		JOIN hv_sections sec ON sec.id = w.section_id
 		LEFT JOIN boards bo ON bo.id = w.dest_board_id
 		LEFT JOIN buildings b ON b.id = bo.building_id
+		LEFT JOIN hv_switchboards sb ON sb.id = w.dest_switchboard_id
 		WHERE sec.network_id = $1 ORDER BY w.position, w.name`, n.ID)
 	if err != nil {
 		return nil, err
@@ -94,16 +122,15 @@ func (s *Store) HVNetwork(ctx context.Context) (*model.HVNetwork, error) {
 	for wrows.Next() {
 		var w model.HVWay
 		if err := wrows.Scan(&w.ID, &w.SectionID, &w.Name, &w.RatingA,
-			&w.DestBoardID, &w.DestLabel, &w.DestDetail, &w.Notes, &w.Position, &w.CreatedAt, &w.UpdatedAt,
-			&w.DestBoardCode, &w.DestBuildingName); err != nil {
+			&w.DestBoardID, &w.DestSwitchboardID, &w.DestLabel, &w.DestDetail, &w.Notes, &w.Position,
+			&w.CreatedAt, &w.UpdatedAt,
+			&w.DestBoardCode, &w.DestBuildingName, &w.DestSwitchboardName); err != nil {
 			wrows.Close()
 			return nil, err
 		}
 		w.Devices = []model.HVDevice{}
-		if i, ok := secAt[w.SectionID]; ok {
-			n.Sections[i].Ways = append(n.Sections[i].Ways, w)
-			wayAt[w.ID] = [2]int{i, len(n.Sections[i].Ways) - 1}
-		}
+		wayAt[w.ID] = len(ways)
+		ways = append(ways, w)
 	}
 	wrows.Close()
 	if err := wrows.Err(); err != nil {
@@ -129,15 +156,13 @@ func (s *Store) HVNetwork(ctx context.Context) (*model.HVNetwork, error) {
 			return nil, err
 		}
 		if d.FeederID != 0 {
-			if p, ok := feederAt[d.FeederID]; ok {
-				f := &n.Sections[p[0]].Feeders[p[1]]
-				f.Devices = append(f.Devices, d)
+			if i, ok := feederAt[d.FeederID]; ok {
+				feeders[i].Devices = append(feeders[i].Devices, d)
 			}
 			continue
 		}
-		if p, ok := wayAt[d.WayID]; ok {
-			w := &n.Sections[p[0]].Ways[p[1]]
-			w.Devices = append(w.Devices, d)
+		if i, ok := wayAt[d.WayID]; ok {
+			ways[i].Devices = append(ways[i].Devices, d)
 		}
 	}
 	drows.Close()
@@ -145,6 +170,7 @@ func (s *Store) HVNetwork(ctx context.Context) (*model.HVNetwork, error) {
 		return nil, err
 	}
 
+	var couplers []model.HVCoupler
 	crows, err := pool.Query(ctx, `SELECT id, network_id, name, left_section_id, right_section_id, closed,
 		rating_a, created_at, updated_at
 		FROM hv_couplers WHERE network_id = $1 ORDER BY id`, n.ID)
@@ -158,17 +184,32 @@ func (s *Store) HVNetwork(ctx context.Context) (*model.HVNetwork, error) {
 			crows.Close()
 			return nil, err
 		}
-		n.Couplers = append(n.Couplers, c)
+		couplers = append(couplers, c)
 	}
 	crows.Close()
 	if err := crows.Err(); err != nil {
 		return nil, err
 	}
 
-	// Feeders and ways read left to right in the order they are arranged on the
-	// bar, falling back to the same natural name order used everywhere else.
-	for i := range n.Sections {
-		sec := &n.Sections[i]
+	// Assemble. Feeders and ways read left to right in the order they are
+	// arranged on the bar, falling back to the natural name order used
+	// everywhere else; a device reads down its own conductor.
+	for i := range feeders {
+		d := feeders[i].Devices
+		sort.SliceStable(d, func(a, b int) bool { return d[a].Position < d[b].Position })
+		if j, ok := secAt[feeders[i].SectionID]; ok {
+			sections[j].Feeders = append(sections[j].Feeders, feeders[i])
+		}
+	}
+	for i := range ways {
+		d := ways[i].Devices
+		sort.SliceStable(d, func(a, b int) bool { return d[a].Position < d[b].Position })
+		if j, ok := secAt[ways[i].SectionID]; ok {
+			sections[j].Ways = append(sections[j].Ways, ways[i])
+		}
+	}
+	for i := range sections {
+		sec := &sections[i]
 		sort.SliceStable(sec.Feeders, func(a, b int) bool {
 			if sec.Feeders[a].Position != sec.Feeders[b].Position {
 				return sec.Feeders[a].Position < sec.Feeders[b].Position
@@ -181,14 +222,22 @@ func (s *Store) HVNetwork(ctx context.Context) (*model.HVNetwork, error) {
 			}
 			return model.NaturalLess(sec.Ways[a].Name, sec.Ways[b].Name)
 		})
-		for j := range sec.Feeders {
-			d := sec.Feeders[j].Devices
-			sort.SliceStable(d, func(a, b int) bool { return d[a].Position < d[b].Position })
+		if j, ok := boardAt[sec.SwitchboardID]; ok {
+			n.Switchboards[j].Sections = append(n.Switchboards[j].Sections, *sec)
 		}
-		for j := range sec.Ways {
-			d := sec.Ways[j].Devices
-			sort.SliceStable(d, func(a, b int) bool { return d[a].Position < d[b].Position })
+	}
+	// A coupler belongs to the switchboard of the sections it ties.
+	for _, c := range couplers {
+		i, ok := secAt[c.LeftSectionID]
+		if !ok {
+			continue
 		}
+		j, ok := boardAt[sections[i].SwitchboardID]
+		if !ok {
+			continue
+		}
+		c.SwitchboardID = sections[i].SwitchboardID
+		n.Switchboards[j].Couplers = append(n.Switchboards[j].Couplers, c)
 	}
 	n.Compute()
 	return &n, nil
@@ -200,8 +249,26 @@ func (s *Store) defaultSection(ctx context.Context, tx pgx.Tx, networkID int64) 
 	var id int64
 	err := tx.QueryRow(ctx, `SELECT id FROM hv_sections WHERE network_id = $1 ORDER BY position, id LIMIT 1`, networkID).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
-		err = tx.QueryRow(ctx, `INSERT INTO hv_sections (network_id, name, position) VALUES ($1, 'Section A', 0) RETURNING id`,
-			networkID).Scan(&id)
+		board, berr := s.defaultSwitchboard(ctx, tx, networkID)
+		if berr != nil {
+			return 0, berr
+		}
+		err = tx.QueryRow(ctx, `INSERT INTO hv_sections (network_id, switchboard_id, name, position)
+			VALUES ($1, $2, 'Section A', 0) RETURNING id`, networkID, board).Scan(&id)
+	}
+	return id, err
+}
+
+// defaultSwitchboard returns the switchboard a new section belongs on when the
+// caller does not name one, creating the first board if there is none.
+func (s *Store) defaultSwitchboard(ctx context.Context, tx pgx.Tx, networkID int64) (int64, error) {
+	var id int64
+	err := tx.QueryRow(ctx, `SELECT id FROM hv_switchboards WHERE network_id = $1 ORDER BY position, id LIMIT 1`,
+		networkID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		err = tx.QueryRow(ctx, `INSERT INTO hv_switchboards (network_id, name, voltage, phases, frequency, position)
+			SELECT $1, coalesce(nullif(voltage, ''), 'HV') || ' Switchboard', voltage, '3p', '50Hz', 0
+			FROM hv_networks WHERE id = $1 RETURNING id`, networkID).Scan(&id)
 	}
 	return id, err
 }
@@ -221,14 +288,124 @@ func (s *Store) UpdateHVNetwork(ctx context.Context, role string, id int64, name
 	})
 }
 
-// Sections -----------------------------------------------------------------
+// Switchboards -------------------------------------------------------------
 
-func (s *Store) CreateHVSection(ctx context.Context, role string, networkID int64, name string) (int64, error) {
+func (s *Store) CreateHVSwitchboard(ctx context.Context, role string, b model.HVSwitchboard) (int64, error) {
 	var id int64
 	err := s.withTx(ctx, func(tx pgx.Tx) error {
-		if err := tx.QueryRow(ctx, `INSERT INTO hv_sections (network_id, name, position)
-			VALUES ($1, $2, (SELECT coalesce(max(position),-1)+1 FROM hv_sections WHERE network_id = $1))
-			RETURNING id`, networkID, name).Scan(&id); err != nil {
+		if err := tx.QueryRow(ctx, `INSERT INTO hv_switchboards
+			(network_id, name, voltage, phases, frequency, current_a, fault_ka, position)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,
+			(SELECT coalesce(max(position),-1)+1 FROM hv_switchboards WHERE network_id = $1)) RETURNING id`,
+			b.NetworkID, b.Name, b.Voltage, b.Phases, b.Frequency, b.CurrentA, b.FaultKA).Scan(&id); err != nil {
+			return err
+		}
+		// A switchboard is nothing without a bus to hang things off, so it
+		// starts with one section the way the first board did.
+		if _, err := tx.Exec(ctx, `INSERT INTO hv_sections (network_id, switchboard_id, name, position)
+			VALUES ($1, $2, 'Section A', (SELECT coalesce(max(position),-1)+1 FROM hv_sections WHERE network_id = $1))`,
+			b.NetworkID, id); err != nil {
+			return err
+		}
+		return s.audit(ctx, tx, role, "create", "hv_switchboard", id, "Added switchboard "+b.Name)
+	})
+	return id, err
+}
+
+func (s *Store) UpdateHVSwitchboard(ctx context.Context, role string, b model.HVSwitchboard) error {
+	return s.withTx(ctx, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE hv_switchboards SET name = $2, voltage = $3, phases = $4,
+			frequency = $5, current_a = $6, fault_ka = $7, updated_at = now() WHERE id = $1`,
+			b.ID, b.Name, b.Voltage, b.Phases, b.Frequency, b.CurrentA, b.FaultKA)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrNotFound
+		}
+		return s.audit(ctx, tx, role, "update", "hv_switchboard", b.ID, "Updated switchboard "+b.Name)
+	})
+}
+
+func (s *Store) DeleteHVSwitchboard(ctx context.Context, role string, id int64) error {
+	return s.withTx(ctx, func(tx pgx.Tx) error {
+		var name string
+		var sections int
+		if err := tx.QueryRow(ctx, `SELECT b.name, (SELECT count(*) FROM hv_sections WHERE switchboard_id = b.id)
+			FROM hv_switchboards b WHERE b.id = $1`, id).Scan(&name, &sections); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
+		}
+		if sections > 0 {
+			return &UserError{"Delete the bus sections on " + name + " first, so nothing is thrown away by mistake."}
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM hv_switchboards WHERE id = $1`, id); err != nil {
+			return err
+		}
+		return s.audit(ctx, tx, role, "delete", "hv_switchboard", id, "Deleted switchboard "+name)
+	})
+}
+
+// MoveHVSwitchboard shifts a switchboard one place up or down the drawing.
+func (s *Store) MoveHVSwitchboard(ctx context.Context, role string, id int64, delta int) error {
+	return s.withTx(ctx, func(tx pgx.Tx) error {
+		var networkID int64
+		var name string
+		if err := tx.QueryRow(ctx, `SELECT network_id, name FROM hv_switchboards WHERE id = $1`, id).
+			Scan(&networkID, &name); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
+		}
+		if _, err := tx.Exec(ctx, `WITH ordered AS (
+			SELECT id, row_number() OVER (ORDER BY position, id) - 1 AS rn
+			FROM hv_switchboards WHERE network_id = $1)
+			UPDATE hv_switchboards b SET position = o.rn FROM ordered o WHERE b.id = o.id`, networkID); err != nil {
+			return err
+		}
+		var pos int
+		if err := tx.QueryRow(ctx, `SELECT position FROM hv_switchboards WHERE id = $1`, id).Scan(&pos); err != nil {
+			return err
+		}
+		var otherID int64
+		err := tx.QueryRow(ctx, `SELECT id FROM hv_switchboards WHERE network_id = $1 AND position = $2`,
+			networkID, pos+delta).Scan(&otherID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return &UserError{"That switchboard is already at the end."}
+		}
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE hv_switchboards SET position = $2, updated_at = now() WHERE id = $1`,
+			otherID, pos); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE hv_switchboards SET position = $2, updated_at = now() WHERE id = $1`,
+			id, pos+delta); err != nil {
+			return err
+		}
+		return s.audit(ctx, tx, role, "update", "hv_switchboard", id, "Moved switchboard "+name)
+	})
+}
+
+// Sections -----------------------------------------------------------------
+
+func (s *Store) CreateHVSection(ctx context.Context, role string, networkID, switchboardID int64, name string) (int64, error) {
+	var id int64
+	err := s.withTx(ctx, func(tx pgx.Tx) error {
+		board := switchboardID
+		if board == 0 {
+			var err error
+			if board, err = s.defaultSwitchboard(ctx, tx, networkID); err != nil {
+				return err
+			}
+		}
+		if err := tx.QueryRow(ctx, `INSERT INTO hv_sections (network_id, switchboard_id, name, position)
+			VALUES ($1, $2, $3, (SELECT coalesce(max(position),-1)+1 FROM hv_sections WHERE network_id = $1))
+			RETURNING id`, networkID, board, name).Scan(&id); err != nil {
 			return err
 		}
 		return s.audit(ctx, tx, role, "create", "hv_section", id, "Added bus section "+name)
@@ -275,9 +452,9 @@ func (s *Store) CreateHVFeeder(ctx context.Context, role string, f model.HVFeede
 				return err
 			}
 		}
-		if err := tx.QueryRow(ctx, `INSERT INTO hv_feeders (network_id, section_id, name, switchgear, voltage, source, rating_a, position)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,(SELECT coalesce(max(position),-1)+1 FROM hv_feeders WHERE network_id = $1))
-			RETURNING id`, f.NetworkID, section, f.Name, f.Switchgear, f.Voltage, f.Source, f.RatingA).Scan(&id); err != nil {
+		if err := tx.QueryRow(ctx, `INSERT INTO hv_feeders (network_id, section_id, name, switchgear, kind, voltage, source, rating_a, position)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,(SELECT coalesce(max(position),-1)+1 FROM hv_feeders WHERE network_id = $1))
+			RETURNING id`, f.NetworkID, section, f.Name, f.Switchgear, f.Kind, f.Voltage, f.Source, f.RatingA).Scan(&id); err != nil {
 			return err
 		}
 		// A feeder is drawn from its switchgear down, so a new one starts with one.
@@ -296,9 +473,9 @@ func (s *Store) CreateHVFeeder(ctx context.Context, role string, f model.HVFeede
 
 func (s *Store) UpdateHVFeeder(ctx context.Context, role string, f model.HVFeeder) error {
 	return s.withTx(ctx, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `UPDATE hv_feeders SET name = $2, switchgear = $3, voltage = $4, source = $5,
-			rating_a = $6, section_id = coalesce(nullif($7::bigint, 0), section_id), updated_at = now()
-			WHERE id = $1`, f.ID, f.Name, f.Switchgear, f.Voltage, f.Source, f.RatingA, f.SectionID)
+		tag, err := tx.Exec(ctx, `UPDATE hv_feeders SET name = $2, switchgear = $3, kind = $4, voltage = $5, source = $6,
+			rating_a = $7, section_id = coalesce(nullif($8::bigint, 0), section_id), updated_at = now()
+			WHERE id = $1`, f.ID, f.Name, f.Switchgear, f.Kind, f.Voltage, f.Source, f.RatingA, f.SectionID)
 		if err != nil {
 			return err
 		}
@@ -480,10 +657,11 @@ func (s *Store) CreateHVWay(ctx context.Context, role string, w model.HVWay, net
 				return err
 			}
 		}
-		if err := tx.QueryRow(ctx, `INSERT INTO hv_ways (section_id, name, rating_a, dest_board_id, dest_label, dest_detail, notes, position)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,
+		if err := tx.QueryRow(ctx, `INSERT INTO hv_ways (section_id, name, rating_a, dest_board_id, dest_switchboard_id,
+			dest_label, dest_detail, notes, position)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,
 			(SELECT coalesce(max(position),-1)+1 FROM hv_ways WHERE section_id = $1)) RETURNING id`,
-			section, w.Name, w.RatingA, w.DestBoardID, w.DestLabel, w.DestDetail, w.Notes).Scan(&id); err != nil {
+			section, w.Name, w.RatingA, w.DestBoardID, w.DestSwitchboardID, w.DestLabel, w.DestDetail, w.Notes).Scan(&id); err != nil {
 			return err
 		}
 		// A way is drawn from its switchgear down, so a new one starts with one.
@@ -499,9 +677,10 @@ func (s *Store) CreateHVWay(ctx context.Context, role string, w model.HVWay, net
 func (s *Store) UpdateHVWay(ctx context.Context, role string, w model.HVWay) error {
 	return s.withTx(ctx, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `UPDATE hv_ways SET section_id = coalesce(nullif($2::bigint, 0), section_id),
-			name = $3, rating_a = $4, dest_board_id = $5, dest_label = $6, dest_detail = $7, notes = $8,
-			updated_at = now() WHERE id = $1`,
-			w.ID, w.SectionID, w.Name, w.RatingA, w.DestBoardID, w.DestLabel, w.DestDetail, w.Notes)
+			name = $3, rating_a = $4, dest_board_id = $5, dest_switchboard_id = $6, dest_label = $7,
+			dest_detail = $8, notes = $9, updated_at = now() WHERE id = $1`,
+			w.ID, w.SectionID, w.Name, w.RatingA, w.DestBoardID, w.DestSwitchboardID, w.DestLabel,
+			w.DestDetail, w.Notes)
 		if err != nil {
 			return err
 		}

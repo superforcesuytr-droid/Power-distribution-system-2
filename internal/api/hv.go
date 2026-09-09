@@ -15,6 +15,11 @@ func (s *Server) routesHV(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/hv", s.handleHVGet)
 	mux.HandleFunc("PUT /api/hv", s.requireRole(model.RoleSupervisor, s.handleHVUpdate))
 
+	mux.HandleFunc("POST /api/hv/switchboards", s.requireRole(model.RoleSupervisor, s.handleHVBoardCreate))
+	mux.HandleFunc("PUT /api/hv/switchboards/{id}", s.requireRole(model.RoleSupervisor, s.handleHVBoardUpdate))
+	mux.HandleFunc("DELETE /api/hv/switchboards/{id}", s.requireRole(model.RoleSupervisor, s.handleHVBoardDelete))
+	mux.HandleFunc("POST /api/hv/switchboards/{id}/move", s.requireRole(model.RoleSupervisor, s.handleHVBoardMove))
+
 	mux.HandleFunc("POST /api/hv/sections", s.requireRole(model.RoleSupervisor, s.handleHVSectionCreate))
 	mux.HandleFunc("PUT /api/hv/sections/{id}", s.requireRole(model.RoleSupervisor, s.handleHVSectionUpdate))
 	mux.HandleFunc("DELETE /api/hv/sections/{id}", s.requireRole(model.RoleSupervisor, s.handleHVSectionDelete))
@@ -86,6 +91,7 @@ func (s *Server) handleHVUpdate(w http.ResponseWriter, r *http.Request) {
 type hvFeederInput struct {
 	Name       string   `json:"name"`
 	Switchgear string   `json:"switchgear"`
+	Kind       string   `json:"kind"`
 	SectionID  int64    `json:"section_id"`
 	Voltage    string   `json:"voltage"`
 	Source     string   `json:"source"`
@@ -97,12 +103,19 @@ func (in hvFeederInput) toModel(id, networkID int64, defVoltage string) (model.H
 		ID: id, NetworkID: networkID, SectionID: in.SectionID,
 		Name:       strings.ToUpper(strings.TrimSpace(in.Name)),
 		Switchgear: strings.ToUpper(strings.TrimSpace(in.Switchgear)),
+		Kind:       strings.TrimSpace(in.Kind),
 		Voltage:    strings.TrimSpace(in.Voltage),
 		Source:     strings.TrimSpace(in.Source),
 		RatingA:    in.RatingA,
 	}
 	if err := required("Feeder name", f.Name); err != nil {
 		return f, err
+	}
+	if f.Kind == "" {
+		f.Kind = model.FeederSupply
+	}
+	if !model.ValidFeederKind(f.Kind) {
+		return f, &db.UserError{Msg: "An incomer is either an incoming supply or a generator."}
 	}
 	if f.Voltage == "" {
 		f.Voltage = defVoltage
@@ -229,21 +242,23 @@ type hvWayInput struct {
 	Name      string   `json:"name"`
 	RatingA   *float64 `json:"rating_a"`
 
-	DestBoardID *int64 `json:"dest_board_id"`
-	DestLabel   string `json:"dest_label"`
-	DestDetail  string `json:"dest_detail"`
-	Notes       string `json:"notes"`
+	DestBoardID       *int64 `json:"dest_board_id"`
+	DestSwitchboardID *int64 `json:"dest_switchboard_id"`
+	DestLabel         string `json:"dest_label"`
+	DestDetail        string `json:"dest_detail"`
+	Notes             string `json:"notes"`
 }
 
 func (in hvWayInput) toModel(id int64) (model.HVWay, error) {
 	w := model.HVWay{
 		ID: id, SectionID: in.SectionID,
-		Name:        strings.TrimSpace(in.Name),
-		RatingA:     in.RatingA,
-		DestBoardID: in.DestBoardID,
-		DestLabel:   strings.TrimSpace(in.DestLabel),
-		DestDetail:  strings.TrimSpace(in.DestDetail),
-		Notes:       strings.TrimSpace(in.Notes),
+		Name:              strings.TrimSpace(in.Name),
+		RatingA:           in.RatingA,
+		DestBoardID:       in.DestBoardID,
+		DestSwitchboardID: in.DestSwitchboardID,
+		DestLabel:         strings.TrimSpace(in.DestLabel),
+		DestDetail:        strings.TrimSpace(in.DestDetail),
+		Notes:             strings.TrimSpace(in.Notes),
 	}
 	if err := required("Way name", w.Name); err != nil {
 		return w, err
@@ -251,12 +266,17 @@ func (in hvWayInput) toModel(id int64) (model.HVWay, error) {
 	if w.RatingA != nil && (*w.RatingA <= 0 || *w.RatingA > 100000) {
 		return w, &db.UserError{Msg: "Rating must be between 0 and 100000 A."}
 	}
-	// A destination board carries its own name, so a separate label would only
-	// contradict it.
+	// A way lands in one place. A destination carries its own name, so a
+	// separate label, or a second destination, would only contradict it.
 	if w.DestBoardID != nil && *w.DestBoardID == 0 {
 		w.DestBoardID = nil
 	}
-	if w.DestBoardID != nil {
+	if w.DestSwitchboardID != nil && *w.DestSwitchboardID == 0 {
+		w.DestSwitchboardID = nil
+	}
+	if w.DestSwitchboardID != nil {
+		w.DestBoardID, w.DestLabel = nil, ""
+	} else if w.DestBoardID != nil {
 		w.DestLabel = ""
 	}
 	return w, nil
@@ -352,16 +372,21 @@ func (s *Server) couplerModel(r *http.Request, in hvCouplerInput, id int64) (mod
 	if in.AfterID <= 0 {
 		return c, &db.UserError{Msg: "Choose where on the busbar the coupler sits."}
 	}
-	for i, sec := range n.Sections {
-		if sec.ID != in.AfterID {
-			continue
+	// A coupler ties two sections of the same switchboard, so the section on
+	// its right is the next one along that board's own bus.
+	for _, board := range n.Switchboards {
+		for i, sec := range board.Sections {
+			if sec.ID != in.AfterID {
+				continue
+			}
+			if i+1 >= len(board.Sections) {
+				return c, &db.UserError{Msg: "There is no section after " + sec.Name + " on " + board.Name +
+					", so a coupler cannot sit there."}
+			}
+			c.LeftSectionID = sec.ID
+			c.RightSectionID = board.Sections[i+1].ID
+			return c, nil
 		}
-		if i+1 >= len(n.Sections) {
-			return c, &db.UserError{Msg: "There is no section after " + sec.Name + ", so a coupler cannot sit there."}
-		}
-		c.LeftSectionID = sec.ID
-		c.RightSectionID = n.Sections[i+1].ID
-		return c, nil
 	}
 	return c, &db.UserError{Msg: "That section is no longer on the busbar."}
 }
@@ -580,10 +605,128 @@ func (s *Server) handleHVDevicePlace(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
+// Switchboards -------------------------------------------------------------
+
+type hvBoardInput struct {
+	Name      string   `json:"name"`
+	Voltage   string   `json:"voltage"`
+	Phases    string   `json:"phases"`
+	Frequency string   `json:"frequency"`
+	CurrentA  *float64 `json:"current_a"`
+	FaultKA   *float64 `json:"fault_ka"`
+}
+
+func (in hvBoardInput) toModel(id, networkID int64) (model.HVSwitchboard, error) {
+	b := model.HVSwitchboard{
+		ID: id, NetworkID: networkID,
+		Name:      strings.TrimSpace(in.Name),
+		Voltage:   strings.TrimSpace(in.Voltage),
+		Phases:    strings.TrimSpace(in.Phases),
+		Frequency: strings.TrimSpace(in.Frequency),
+		CurrentA:  in.CurrentA,
+		FaultKA:   in.FaultKA,
+	}
+	if err := required("Switchboard name", b.Name); err != nil {
+		return b, err
+	}
+	if b.CurrentA != nil && (*b.CurrentA <= 0 || *b.CurrentA > 100000) {
+		return b, &db.UserError{Msg: "Rated current must be between 0 and 100000 A."}
+	}
+	if b.FaultKA != nil && (*b.FaultKA <= 0 || *b.FaultKA > 1000) {
+		return b, &db.UserError{Msg: "Fault rating must be between 0 and 1000 kA."}
+	}
+	return b, nil
+}
+
+func (s *Server) handleHVBoardCreate(w http.ResponseWriter, r *http.Request) {
+	var in hvBoardInput
+	if err := decode(r, &in); err != nil {
+		fail(w, err)
+		return
+	}
+	n, err := s.Store.HVNetwork(ctx(r))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	b, err := in.toModel(0, n.ID)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	id, err := s.Store.CreateHVSwitchboard(ctx(r), roleOf(r), b)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 201, map[string]int64{"id": id})
+}
+
+func (s *Server) handleHVBoardUpdate(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	var in hvBoardInput
+	if err := decode(r, &in); err != nil {
+		fail(w, err)
+		return
+	}
+	b, err := in.toModel(id, 0)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if err := s.Store.UpdateHVSwitchboard(ctx(r), roleOf(r), b); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+func (s *Server) handleHVBoardDelete(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if err := s.Store.DeleteHVSwitchboard(ctx(r), roleOf(r), id); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+func (s *Server) handleHVBoardMove(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	var in struct {
+		Delta int `json:"delta"`
+	}
+	if err := decode(r, &in); err != nil {
+		fail(w, err)
+		return
+	}
+	if in.Delta != 1 && in.Delta != -1 {
+		fail(w, &db.UserError{Msg: "Move one place at a time."})
+		return
+	}
+	if err := s.Store.MoveHVSwitchboard(ctx(r), roleOf(r), id, in.Delta); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
 // Sections -----------------------------------------------------------------
 
 type hvSectionInput struct {
-	Name string `json:"name"`
+	Name          string `json:"name"`
+	SwitchboardID int64  `json:"switchboard_id"`
 }
 
 func (s *Server) handleHVSectionCreate(w http.ResponseWriter, r *http.Request) {
@@ -602,7 +745,7 @@ func (s *Server) handleHVSectionCreate(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	id, err := s.Store.CreateHVSection(ctx(r), roleOf(r), n.ID, name)
+	id, err := s.Store.CreateHVSection(ctx(r), roleOf(r), n.ID, in.SwitchboardID, name)
 	if err != nil {
 		fail(w, err)
 		return
