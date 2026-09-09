@@ -331,9 +331,23 @@ table.grid td.bar-cell .bar { width: 90px; display: inline-block; vertical-align
 .drag-ghost.over { background: var(--primary); }
 .sld-canvas.dropping { cursor: grabbing; }
 rect.drop-hint { fill: rgba(11,116,196,.14); stroke: var(--primary); stroke-width: 2; stroke-dasharray: 5 4; }
-rect.drop-hint.bar { fill: var(--primary); fill-opacity: .9; stroke: none; }
 .hv-grab { cursor: grab; }
 .sld-canvas.dropping .hv-grab { cursor: grabbing; }
+
+/* A whole way or feeder moves as one column: the plate shows what is being
+   taken hold of, and the others slide aside to open the gap it drops into. */
+.sld-canvas { user-select: none; -webkit-user-select: none; }
+.hv-col { transition: transform .16s cubic-bezier(.2,.7,.3,1); }
+.hv-col.dragging { transition: none; }
+.hv-col-plate { transition: fill-opacity .15s; }
+.hv-col-plate:hover,
+.hv-col:has(.hv-handle:hover) .hv-col-plate,
+.hv-col.dragging .hv-col-plate { fill-opacity: .09; }
+.hv-handle-ring { transition: r .12s, stroke-width .12s; }
+.hv-handle:hover .hv-handle-ring,
+.hv-col.dragging .hv-handle-ring { r: 10px; stroke-width: 3; }
+.hv-col.dragging { filter: drop-shadow(0 6px 14px rgba(15,23,42,.22)); }
+svg.moving-column .hv-col:not(.dragging) { opacity: .55; }
 
 .zoom-bar { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }
 .zoom-bar .btn { min-width: 34px; justify-content: center; font-weight: 700; }
