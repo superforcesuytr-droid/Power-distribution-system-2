@@ -75,9 +75,15 @@ func main() {
 		log.Printf("warning: %v (continuing with defaults)", err)
 	}
 
+	// Only a plain launch stands in for "the application". A copy started for
+	// development, or one asked for a particular port, is meant to run
+	// alongside whatever else is going, so it neither defers to a copy that is
+	// already serving nor claims to be the one that others should defer to.
+	soleInstance := *devDir == "" && *port == 0
+
 	// Launching the application while a copy is already serving should show
 	// that copy rather than start a second server against the same database.
-	if !*headless {
+	if soleInstance && !*headless {
 		if existing, ok := instance.Existing(config.Dir(cfgPath)); ok {
 			log.Printf("already running at %s; showing that window instead of starting again", existing)
 			window.OpenBrowser(existing)
@@ -127,8 +133,10 @@ func main() {
 		}
 	}()
 	log.Printf("serving UI at %s", url)
-	releaseInstance := instance.Acquire(config.Dir(cfgPath), url)
-	defer releaseInstance()
+	if soleInstance {
+		release := instance.Acquire(config.Dir(cfgPath), url)
+		defer release()
+	}
 
 	switch {
 	case *headless:
