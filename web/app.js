@@ -15,6 +15,8 @@
     route: { view: 'dashboard', params: {} },
     explorer: { building_id: '', board_id: '', status: '', q: '' },
     boardFilter: { q: '', level: '' },
+    hv: null,
+    hvBoards: [],
     focus: null,
   };
 
@@ -113,6 +115,7 @@
     try {
       switch (view) {
         case 'explorer': await renderExplorer(); break;
+        case 'hv': await renderHV(); break;
         case 'sld': await renderSLD(); break;
         case 'activity': await renderActivity(); break;
         default: await renderDashboard();
@@ -690,6 +693,197 @@
     }
   }
 
+  // ------------------------------------------------------------ HV overview
+  // The site-wide 22 kV picture that sits above the distribution boards:
+  // incoming feeders, the switchgear each lands on, couplers between them, and
+  // the outgoing ways that carry supply down to a board.
+  const PROT_LABEL = { rccb: 'RCCB', elr: 'ELR', elcb: 'ELCB' };
+
+  async function renderHV() {
+    const [net, boards] = await Promise.all([api('GET', '/api/hv'), api('GET', '/api/boards')]);
+    state.hv = net;
+    state.hvBoards = boards;
+    setActiveTab('hv');
+    app.innerHTML = `
+      <div class="page">
+        <div class="hv-head">
+          <div>
+            <h1 class="hv-title">${esc(net.name)}
+              ${canManage() ? '<button class="btn btn-ghost btn-sm" data-action="hv-rename" title="Rename">✎</button>' : ''}
+            </h1>
+            <div class="muted">${esc(net.voltage)} distribution · ${plural(net.feeder_count, 'feeder')} · ${plural(net.way_count, 'outgoing way')}</div>
+          </div>
+          <div class="hv-counts">
+            <div><div class="n">${net.feeder_count}</div><div class="l">Feeders</div></div>
+            <div><div class="n">${net.way_count}</div><div class="l">Ways</div></div>
+            <div><div class="n">${net.transformer_count}</div><div class="l">Transformers</div></div>
+            <div><div class="n">${net.protected_count}</div><div class="l">Protected</div></div>
+            <div><div class="n">${net.linked_count}</div><div class="l">Linked</div></div>
+          </div>
+        </div>
+        ${canEdit() ? `<p class="sld-hint">Click any destination box to jump to that board. Use <b>+ Way</b> under a feeder to add an outgoing way, and the way's <b>✎</b> to fit an RCCB, ELR or ELCB, add a transformer, or set where it feeds.</p>` : ''}
+        <div class="hv-toolbar">
+          ${canManage() ? '<button class="btn btn-primary" data-action="hv-add-feeder">+ Add feeder</button>' : ''}
+          ${canManage() && net.feeders.length > 1 ? '<button class="btn" data-action="hv-add-coupler">+ Add coupler</button>' : ''}
+        </div>
+        <div class="sld-canvas">${net.feeders.length ? hvSVG(net) : '<div class="empty"><h2>No feeders yet</h2><p>Add the incoming feeders to start the overview.</p></div>'}</div>
+      </div>`;
+    applyFocus();
+  }
+
+  function hvSVG(net) {
+    const C = { bus: '#0b74c4', line: '#334155', tx: '#7c3aed', prot: '#d97a06', dest: '#0f8a4f', muted: '#94a3b8' };
+    const WAY_W = 150, WAY_GAP = 16, FEEDER_GAP = 90, MARGIN = 44;
+    const MIN_FEEDER_W = 250;
+
+    const groups = net.feeders.map(f => {
+      const n = Math.max(1, f.ways.length);
+      return { f, width: Math.max(MIN_FEEDER_W, n * WAY_W + (n - 1) * WAY_GAP) };
+    });
+    const contentW = groups.reduce((s, g) => s + g.width, 0) + Math.max(0, groups.length - 1) * FEEDER_GAP;
+    const W = Math.max(760, contentW + MARGIN * 2);
+    const startX = MARGIN + (W - MARGIN * 2 - contentW) / 2;
+    const centers = [];
+    let x = startX;
+    groups.forEach(g => { centers.push(x + g.width / 2); x += g.width + FEEDER_GAP; });
+    const byId = {};
+    groups.forEach((g, i) => { byId[g.f.id] = { g, cx: centers[i], i }; });
+
+    // Vertical bands, top to bottom.
+    const feederY = 40;            // "F1  22kV" label
+    const swY = feederY + 66;       // incoming isolator
+    const panelY = swY + 34;        // switchgear panel box
+    const PANEL_H = 62;
+    const busY = panelY + PANEL_H + 46;   // the feeder's busbar
+    const wayTapY = busY + 30;      // outgoing breaker
+    const protY = wayTapY + 52;     // protection device, when fitted
+    const txY = protY + 62;         // transformer, when fitted
+    const destY = txY + 82;         // destination box
+    const DEST_H = 58;
+    const H = destY + DEST_H + MARGIN;
+
+    const out = [];
+
+    // One continuous busbar runs the length of the site. Every feeder lands on
+    // it, and a coupler is what breaks it into sections rather than each feeder
+    // owning a separate bar.
+    const busL = centers[0] - groups[0].width / 2;
+    const busR = centers[centers.length - 1] + groups[groups.length - 1].width / 2;
+    out.push(`<line x1="${busL}" y1="${busY}" x2="${busR}" y2="${busY}" stroke="${C.bus}" stroke-width="6" stroke-linecap="round"/>`);
+
+    groups.forEach((g, gi) => {
+      const f = g.f, cx = centers[gi];
+      // Incoming supply, isolator and switchgear panel.
+      out.push(`<text x="${cx}" y="${feederY}" text-anchor="middle" font-size="19" font-weight="700" fill="${C.bus}">${esc(f.name)}</text>`);
+      out.push(`<text x="${cx}" y="${feederY + 18}" text-anchor="middle" font-size="11" fill="${C.muted}" letter-spacing="1.2">${esc(f.voltage)}${f.source ? ' · ' + esc(f.source).toUpperCase() : ''}</text>`);
+      out.push(`<line x1="${cx}" y1="${feederY + 26}" x2="${cx}" y2="${panelY}" stroke="${C.bus}" stroke-width="3"/>`);
+      out.push(hvBreaker(cx, swY, C.bus));
+      out.push(`<g class="hv-node" id="hv-feeder-${f.id}" data-action="hv-edit-feeder" data-id="${f.id}">
+        <title>${esc(f.name)} switchgear${canManage() ? ' - click to edit' : ''}</title>
+        <rect x="${cx - 96}" y="${panelY}" width="192" height="${PANEL_H}" rx="9" fill="#f7fbfd" stroke="${C.bus}" stroke-width="2.5"/>
+        <text x="${cx}" y="${panelY + 24}" text-anchor="middle" font-size="11" fill="${C.muted}" letter-spacing="1.4">SWITCHGEAR</text>
+        <text x="${cx}" y="${panelY + 45}" text-anchor="middle" font-size="15" font-weight="700" fill="#1c2733">${esc(f.voltage)}${f.rating_a ? ' · ' + fmtA(f.rating_a) + ' A' : ''}</text>
+      </g>`);
+      out.push(`<line x1="${cx}" y1="${panelY + PANEL_H}" x2="${cx}" y2="${busY}" stroke="${C.bus}" stroke-width="3"/>`);
+
+      if (!f.ways.length) {
+        out.push(`<text x="${cx}" y="${busY + 40}" text-anchor="middle" font-size="12" fill="${C.muted}">No outgoing ways yet</text>`);
+      }
+
+      const n = f.ways.length;
+      const spanW = n * WAY_W + (n - 1) * WAY_GAP;
+      const left = cx - spanW / 2;
+      f.ways.forEach((way, i) => {
+        const wx = left + i * (WAY_W + WAY_GAP) + WAY_W / 2;
+        out.push(`<circle cx="${wx}" cy="${busY}" r="4.5" fill="${C.bus}"/>`);
+        out.push(`<line x1="${wx}" y1="${busY}" x2="${wx}" y2="${destY}" stroke="${C.line}" stroke-width="2.5"/>`);
+        out.push(hvBreaker(wx, wayTapY, C.line));
+        out.push(`<text x="${wx + 20}" y="${wayTapY - 4}" font-size="12" font-weight="700" fill="#1c2733">${esc(way.name)}</text>`);
+        if (way.rating_a) out.push(`<text x="${wx + 20}" y="${wayTapY + 11}" font-size="11" fill="${C.muted}">${fmtA(way.rating_a)} A</text>`);
+
+        const prot = PROT_LABEL[way.protection];
+        if (prot) {
+          out.push(`<g class="hv-node"><title>${esc(prot)}${way.protection_note ? ' · ' + esc(way.protection_note) : ''}</title>
+            <rect x="${wx - 34}" y="${protY - 15}" width="68" height="30" rx="7" fill="#fffaf0" stroke="${C.prot}" stroke-width="2"/>
+            <text x="${wx}" y="${protY + 5}" text-anchor="middle" font-size="12" font-weight="700" fill="${C.prot}">${esc(prot)}</text>
+          </g>`);
+        }
+        if (way.has_transformer) {
+          // The two overlapping rings that mean a transformer on any drawing.
+          out.push(`<g class="hv-node"><title>${esc(way.transformer_name || 'Transformer')}${way.transformer_kva ? ' · ' + fmtA(way.transformer_kva) + ' kVA' : ''}${way.transformer_ratio ? ' · ' + esc(way.transformer_ratio) : ''}</title>
+            <rect x="${wx - 17}" y="${txY - 26}" width="34" height="52" fill="#fff"/>
+            <circle cx="${wx}" cy="${txY - 9}" r="16" fill="none" stroke="${C.tx}" stroke-width="2.5"/>
+            <circle cx="${wx}" cy="${txY + 9}" r="16" fill="none" stroke="${C.tx}" stroke-width="2.5"/>
+            <text x="${wx + 24}" y="${txY - 2}" font-size="11" font-weight="700" fill="${C.tx}">${esc(way.transformer_name || 'TX')}</text>
+            ${way.transformer_kva ? `<text x="${wx + 24}" y="${txY + 12}" font-size="10" fill="${C.muted}">${fmtA(way.transformer_kva)} kVA</text>` : ''}
+            ${way.transformer_ratio ? `<text x="${wx + 24}" y="${txY + 25}" font-size="10" fill="${C.muted}">${esc(way.transformer_ratio)}</text>` : ''}
+          </g>`);
+        }
+
+        // The destination box: what this way actually feeds.
+        const linked = !!way.dest_board_id;
+        const dcol = linked ? C.dest : C.muted;
+        const label = way.dest_label || way.dest_board_code || 'Not assigned';
+        const sub = linked ? (way.dest_building_name || 'Open on the dashboard') : (way.dest_label ? 'External' : 'Set a destination');
+        // A linked box opens its board for anyone; an unlinked one is only a
+        // shortcut to fill in the destination, so it is inert for a viewer.
+        const destAct = linked ? `data-action="hv-open-dest" data-id="${way.dest_board_id}"`
+          : (canEdit() ? `data-action="hv-edit-way" data-id="${way.id}"` : '');
+        out.push(`<g class="${destAct ? 'hv-node ' : ''}${linked ? 'hv-linked' : ''}" id="hv-way-${way.id}" ${destAct}>
+          <title>${esc(label)}${linked ? ' - click to open this board' : (destAct ? ' - click to set where this way feeds' : '')}</title>
+          <rect x="${wx - WAY_W / 2 + 6}" y="${destY}" width="${WAY_W - 12}" height="${DEST_H}" rx="9"
+                fill="${linked ? '#f2fbf6' : '#f8fafc'}" stroke="${dcol}" stroke-width="2.5"/>
+          <text x="${wx}" y="${destY + 25}" text-anchor="middle" font-size="15" font-weight="700" fill="${linked ? '#0f8a4f' : '#64748b'}">${esc(label)}</text>
+          <text x="${wx}" y="${destY + 43}" text-anchor="middle" font-size="10" fill="${C.muted}">${esc(sub)}</text>
+        </g>`);
+        if (canEdit()) {
+          out.push(`<g class="sld-btn" data-action="hv-edit-way" data-id="${way.id}"><title>Edit ${esc(way.name)}</title>
+            <rect x="${wx + WAY_W / 2 - 32}" y="${destY - 32}" width="26" height="26" rx="7" fill="#fff" stroke="${C.line}" stroke-opacity=".35"/>
+            <g transform="translate(${wx + WAY_W / 2 - 29} ${destY - 29})" fill="none" stroke="${C.line}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${SLD_ICONS.edit}</g></g>`);
+        }
+      });
+
+      if (canEdit()) {
+        out.push(sldPill(cx, busY + (n ? -30 : 70), 78, '+ Way', `data-action="hv-add-way" data-id="${f.id}"`, C.bus, 'Add an outgoing way to ' + f.name));
+      }
+    });
+
+    // Couplers go on last so they sit over the busbar and break it. A closed
+    // coupler ties the two sections; an open one leaves them independent.
+    net.couplers.forEach(c => {
+      const l = byId[c.left_id], r = byId[c.right_id];
+      if (!l || !r) return;
+      const a = l.i <= r.i ? l : r, z = l.i <= r.i ? r : l;
+      const mid = ((a.cx + a.g.width / 2) + (z.cx - z.g.width / 2)) / 2;
+      const col = c.closed ? C.bus : C.muted;
+      const gap = c.closed ? 15 : 26;
+      out.push(`<g class="hv-node" data-action="hv-edit-coupler" data-id="${c.id}">
+        <title>${esc(c.name)} - ${c.closed ? 'closed, the two bus sections are tied' : 'open, the bus is split here'}${canManage() ? '. Click to change.' : ''}</title>
+        <rect x="${mid - gap}" y="${busY - 6}" width="${gap * 2}" height="12" fill="#f7fbfd"/>
+        <g stroke="${col}" stroke-width="3" stroke-linecap="round">
+          <line x1="${mid - 13}" y1="${busY - 13}" x2="${mid + 13}" y2="${busY + 13}"/>
+          <line x1="${mid + 13}" y1="${busY - 13}" x2="${mid - 13}" y2="${busY + 13}"/>
+        </g>
+        <text x="${mid}" y="${busY - 24}" text-anchor="middle" font-size="12" font-weight="700" fill="${col}">${esc(c.name)}</text>
+        <text x="${mid}" y="${busY + 34}" text-anchor="middle" font-size="10" letter-spacing="1" fill="${C.muted}">${c.closed ? 'CLOSED' : 'OPEN'}</text>
+      </g>`);
+    });
+
+    return `<svg viewBox="0 0 ${W} ${H}" width="${W}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="${esc(net.name)}">${out.join('')}</svg>`;
+
+    // Switchgear is drawn the way it is on a single line diagram: the conductor
+    // is broken and an X marks the breaker. The masking rectangle is what
+    // breaks the line, so the X reads as a device rather than an asterisk.
+    function hvBreaker(cx, cy, col) {
+      const r = 11;
+      return `<rect x="${cx - r - 2}" y="${cy - r - 2}" width="${(r + 2) * 2}" height="${(r + 2) * 2}" fill="#fff"/>
+        <g stroke="${col}" stroke-width="2.8" stroke-linecap="round">
+          <line x1="${cx - r}" y1="${cy - r}" x2="${cx + r}" y2="${cy + r}"/>
+          <line x1="${cx + r}" y1="${cy - r}" x2="${cx - r}" y2="${cy + r}"/>
+        </g>`;
+    }
+  }
+
   // ------------------------------------------------------------ activity
   async function renderActivity() {
     const entries = await api('GET', '/api/audit?limit=200');
@@ -938,6 +1132,123 @@
   function findMCCB(id) { return (state.board ? state.board.mccbs : []).find(m => m.id === id); }
   function findMCB(id) { for (const m of state.board ? state.board.mccbs : []) { const x = m.mcbs.find(mb => mb.id === id); if (x) return x; } return null; }
 
+  // ---- high-voltage overview
+  function hvRenameForm() {
+    const net = state.hv;
+    formModal('Rename the overview', `
+      ${field('Title', 'name', net.name, { required: true, full: true })}
+      ${field('Voltage', 'voltage', net.voltage, { placeholder: '22kV' })}`,
+      async d => { await api('PUT', '/api/hv', { name: d.name, voltage: d.voltage }); await afterChange('Overview renamed'); });
+  }
+
+  function hvFeederForm(f) {
+    const isEdit = !!(f && f.id);
+    formModal(isEdit ? 'Edit feeder ' + f.name : 'Add feeder', `
+      ${field('Feeder name', 'name', isEdit ? f.name : hvNextFeederName(), { required: true, placeholder: 'F5', attrs: 'style="text-transform:uppercase"' })}
+      ${field('Voltage', 'voltage', isEdit ? f.voltage : (state.hv.voltage || '22kV'), { placeholder: '22kV' })}
+      ${field('Source', 'source', isEdit ? f.source : '', { full: true, placeholder: 'e.g. Incoming supply 5, intake substation' })}
+      ${field('Switchgear rating (A)', 'rating_a', isEdit && f.rating_a != null ? f.rating_a : '', { type: 'number', attrs: 'min="0" max="100000" step="any"', hint: 'Optional' })}`,
+      async d => {
+        const body = { name: d.name, voltage: d.voltage, source: d.source, rating_a: d.rating_a === '' ? null : Number(d.rating_a) };
+        if (isEdit) { state.focus = 'hv-feeder-' + f.id; await api('PUT', '/api/hv/feeders/' + f.id, body); await afterChange('Feeder updated'); }
+        else { const r = await api('POST', '/api/hv/feeders', body); state.focus = 'hv-feeder-' + r.id; await afterChange('Feeder added'); }
+      },
+      isEdit && canManage() ? { deleteLabel: 'Delete feeder', onDelete: () => hvDeleteFeeder(f) } : {});
+  }
+  function hvNextFeederName() {
+    const used = new Set((state.hv.feeders || []).map(f => f.name.toUpperCase()));
+    for (let i = 1; i < 100; i++) { const n = 'F' + i; if (!used.has(n)) return n; }
+    return '';
+  }
+  function hvDeleteFeeder(f) {
+    confirmModal('Delete feeder', `Delete <b>${esc(f.name)}</b> with its ${plural(f.ways.length, 'outgoing way')}, and any coupler tied to it? This cannot be undone.`,
+      async () => { await api('DELETE', '/api/hv/feeders/' + f.id); await afterChange('Feeder deleted'); });
+  }
+
+  function hvWayForm(way, feederId) {
+    const isEdit = !!(way && way.id);
+    const feeders = state.hv.feeders;
+    const boards = state.hvBoards || [];
+    const parent = feeders.find(f => f.id === (isEdit ? way.feeder_id : Number(feederId))) || feeders[0];
+    const form = formModal(isEdit ? 'Edit way ' + way.name : 'Add way to ' + (parent ? parent.name : 'feeder'), `
+      ${field('Fed from', 'feeder_id', parent ? parent.id : '', { type: 'select', required: true, options: feeders.map(f => ({ value: f.id, label: f.name + ' · ' + f.voltage })) })}
+      ${field('Way name', 'name', isEdit ? way.name : hvNextWayName(parent), { required: true, placeholder: 'W1' })}
+      ${field('Rating (A)', 'rating_a', isEdit && way.rating_a != null ? way.rating_a : '', { type: 'number', attrs: 'min="0" max="100000" step="any"', hint: 'Optional' })}
+      ${field('Protection', 'protection', isEdit ? way.protection : 'none', { type: 'select', options: [
+        { value: 'none', label: 'None' }, { value: 'rccb', label: 'RCCB' }, { value: 'elr', label: 'ELR' }, { value: 'elcb', label: 'ELCB' }] })}
+      ${field('Protection note', 'protection_note', isEdit ? way.protection_note : '', { placeholder: 'e.g. 300 mA, 0.5 s' })}
+      <div class="field inline full"><input type="checkbox" name="has_transformer" id="has_tx" ${isEdit && way.has_transformer ? 'checked' : ''}><label for="has_tx">Fit a transformer on this way</label></div>
+      <div class="full" id="tx-fields" ${isEdit && way.has_transformer ? '' : 'hidden'}>
+        <div class="form-grid">
+          ${field('Transformer name', 'transformer_name', isEdit ? way.transformer_name : '', { placeholder: 'TX-1' })}
+          ${field('Rating (kVA)', 'transformer_kva', isEdit && way.transformer_kva != null ? way.transformer_kva : '', { type: 'number', attrs: 'min="0" max="1000000" step="any"' })}
+          ${field('Ratio', 'transformer_ratio', isEdit ? way.transformer_ratio : '', { full: true, placeholder: '22kV / 400V' })}
+        </div>
+      </div>
+      ${field('Feeds board', 'dest_board_id', isEdit && way.dest_board_id ? way.dest_board_id : '', { type: 'select', full: true,
+        options: [{ value: '', label: '— not a board in this system —' }].concat(boards.map(b => ({ value: b.id, label: b.code + ' · ' + b.building_name }))),
+        hint: 'Linking a board makes the destination box clickable.' })}
+      ${field('Or destination label', 'dest_label', isEdit ? way.dest_label : '', { full: true, placeholder: 'e.g. FAC1/PE1, used when it is not a board here' })}
+      ${field('Notes', 'notes', isEdit ? way.notes : '', { type: 'textarea', full: true })}`,
+      async d => {
+        const body = {
+          feeder_id: Number(d.feeder_id), name: d.name,
+          rating_a: d.rating_a === '' ? null : Number(d.rating_a),
+          protection: d.protection, protection_note: d.protection_note,
+          has_transformer: d.has_transformer === 'on',
+          transformer_name: d.transformer_name || '', transformer_ratio: d.transformer_ratio || '',
+          transformer_kva: d.transformer_kva ? Number(d.transformer_kva) : null,
+          dest_board_id: d.dest_board_id ? Number(d.dest_board_id) : null,
+          dest_label: d.dest_label || '', notes: d.notes || '',
+        };
+        if (isEdit) { state.focus = 'hv-way-' + way.id; await api('PUT', '/api/hv/ways/' + way.id, body); await afterChange('Way updated'); }
+        else { const r = await api('POST', '/api/hv/ways', body); state.focus = 'hv-way-' + r.id; await afterChange('Way added'); }
+      },
+      isEdit && canManage() ? { wide: true, deleteLabel: 'Delete way', onDelete: () => hvDeleteWay(way) } : { wide: true });
+    // The transformer detail only matters once one is fitted.
+    const box = $('#has_tx', form), fields = $('#tx-fields', form);
+    box.addEventListener('change', () => { fields.hidden = !box.checked; });
+  }
+  function hvNextWayName(feeder) {
+    const used = new Set(((feeder && feeder.ways) || []).map(w => w.name.toUpperCase()));
+    for (let i = 1; i < 200; i++) { const n = 'W' + i; if (!used.has(n)) return n; }
+    return '';
+  }
+  function hvDeleteWay(way) {
+    confirmModal('Delete way', `Delete way <b>${esc(way.name)}</b>${way.dest_board_code || way.dest_label ? ' feeding ' + esc(way.dest_label || way.dest_board_code) : ''}? This cannot be undone.`,
+      async () => { await api('DELETE', '/api/hv/ways/' + way.id); await afterChange('Way deleted'); });
+  }
+
+  function hvCouplerForm(c) {
+    const isEdit = !!(c && c.id);
+    const feeders = state.hv.feeders;
+    const opts = feeders.map(f => ({ value: f.id, label: f.name }));
+    formModal(isEdit ? 'Edit coupler ' + c.name : 'Add bus coupler', `
+      ${field('Coupler name', 'name', isEdit ? c.name : 'BC-' + (state.hv.couplers.length + 1), { required: true, attrs: 'style="text-transform:uppercase"' })}
+      ${field('Rating (A)', 'rating_a', isEdit && c.rating_a != null ? c.rating_a : '', { type: 'number', attrs: 'min="0" max="100000" step="any"', hint: 'Optional' })}
+      ${field('Ties this feeder', 'left_id', isEdit ? c.left_id : (opts[0] || {}).value, { type: 'select', required: true, options: opts })}
+      ${field('To this feeder', 'right_id', isEdit ? c.right_id : (opts[1] || {}).value, { type: 'select', required: true, options: opts })}
+      <div class="field inline full"><input type="checkbox" name="closed" id="cp_closed" ${isEdit && c.closed ? 'checked' : ''}><label for="cp_closed">Coupler is closed (the two busbars are tied together)</label></div>`,
+      async d => {
+        const body = { name: d.name, left_id: Number(d.left_id), right_id: Number(d.right_id), closed: d.closed === 'on',
+          rating_a: d.rating_a === '' ? null : Number(d.rating_a) };
+        if (isEdit) { await api('PUT', '/api/hv/couplers/' + c.id, body); await afterChange('Coupler updated'); }
+        else { await api('POST', '/api/hv/couplers', body); await afterChange('Coupler added'); }
+      },
+      isEdit && canManage() ? { deleteLabel: 'Delete coupler', onDelete: () => hvDeleteCoupler(c) } : {});
+  }
+  function hvDeleteCoupler(c) {
+    confirmModal('Delete coupler', `Delete coupler <b>${esc(c.name)}</b>?`,
+      async () => { await api('DELETE', '/api/hv/couplers/' + c.id); await afterChange('Coupler deleted'); });
+  }
+
+  function hvFindFeeder(id) { return (state.hv.feeders || []).find(f => f.id === id); }
+  function hvFindWay(id) {
+    for (const f of state.hv.feeders || []) { const w = f.ways.find(x => x.id === id); if (w) return w; }
+    return null;
+  }
+  function hvFindCoupler(id) { return (state.hv.couplers || []).find(c => c.id === id); }
+
   // ---- settings
   async function settingsModal() {
     const [setup, st] = await Promise.all([(await fetch('/api/setup')).json(), refreshStatus()]);
@@ -1100,6 +1411,14 @@
         break;
       }
       case 'delete-circuit': deleteCircuit(findCircuit(id)); break;
+      case 'hv-rename': hvRenameForm(); break;
+      case 'hv-add-feeder': hvFeederForm(null); break;
+      case 'hv-edit-feeder': if (canManage()) hvFeederForm(hvFindFeeder(id)); break;
+      case 'hv-add-way': hvWayForm(null, id); break;
+      case 'hv-edit-way': if (canEdit()) hvWayForm(hvFindWay(id)); break;
+      case 'hv-add-coupler': hvCouplerForm(null); break;
+      case 'hv-edit-coupler': if (canManage()) hvCouplerForm(hvFindCoupler(id)); break;
+      case 'hv-open-dest': navigate(boardHash('dashboard', id)); break;
       case 'refresh': render(); break;
     }
   });

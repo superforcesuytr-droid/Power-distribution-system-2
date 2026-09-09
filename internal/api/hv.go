@@ -1,0 +1,391 @@
+package api
+
+import (
+	"net/http"
+	"strings"
+
+	"github.com/superforcesuytr-droid/power-distribution-system/internal/db"
+	"github.com/superforcesuytr-droid/power-distribution-system/internal/model"
+)
+
+// routesHV registers the high-voltage overview. Feeders and couplers are the
+// shape of the site, so only supervisors may add or remove them; technicians
+// may work on the outgoing ways.
+func (s *Server) routesHV(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/hv", s.handleHVGet)
+	mux.HandleFunc("PUT /api/hv", s.requireRole(model.RoleSupervisor, s.handleHVUpdate))
+
+	mux.HandleFunc("POST /api/hv/feeders", s.requireRole(model.RoleSupervisor, s.handleHVFeederCreate))
+	mux.HandleFunc("PUT /api/hv/feeders/{id}", s.requireRole(model.RoleSupervisor, s.handleHVFeederUpdate))
+	mux.HandleFunc("DELETE /api/hv/feeders/{id}", s.requireRole(model.RoleSupervisor, s.handleHVFeederDelete))
+	mux.HandleFunc("POST /api/hv/feeders/{id}/move", s.requireRole(model.RoleSupervisor, s.handleHVFeederMove))
+
+	mux.HandleFunc("POST /api/hv/ways", s.requireRole(model.RoleTechnician, s.handleHVWayCreate))
+	mux.HandleFunc("PUT /api/hv/ways/{id}", s.requireRole(model.RoleTechnician, s.handleHVWayUpdate))
+	mux.HandleFunc("DELETE /api/hv/ways/{id}", s.requireRole(model.RoleSupervisor, s.handleHVWayDelete))
+
+	mux.HandleFunc("POST /api/hv/couplers", s.requireRole(model.RoleSupervisor, s.handleHVCouplerCreate))
+	mux.HandleFunc("PUT /api/hv/couplers/{id}", s.requireRole(model.RoleSupervisor, s.handleHVCouplerUpdate))
+	mux.HandleFunc("DELETE /api/hv/couplers/{id}", s.requireRole(model.RoleSupervisor, s.handleHVCouplerDelete))
+}
+
+func (s *Server) handleHVGet(w http.ResponseWriter, r *http.Request) {
+	n, err := s.Store.HVNetwork(ctx(r))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, n)
+}
+
+type hvNetworkInput struct {
+	Name    string `json:"name"`
+	Voltage string `json:"voltage"`
+}
+
+func (s *Server) handleHVUpdate(w http.ResponseWriter, r *http.Request) {
+	var in hvNetworkInput
+	if err := decode(r, &in); err != nil {
+		fail(w, err)
+		return
+	}
+	if err := required("Name", in.Name); err != nil {
+		fail(w, err)
+		return
+	}
+	n, err := s.Store.HVNetwork(ctx(r))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	voltage := strings.TrimSpace(in.Voltage)
+	if voltage == "" {
+		voltage = n.Voltage
+	}
+	if err := s.Store.UpdateHVNetwork(ctx(r), roleOf(r), n.ID, strings.TrimSpace(in.Name), voltage); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+// Feeders -----------------------------------------------------------------
+
+type hvFeederInput struct {
+	Name    string   `json:"name"`
+	Voltage string   `json:"voltage"`
+	Source  string   `json:"source"`
+	RatingA *float64 `json:"rating_a"`
+}
+
+func (in hvFeederInput) toModel(id, networkID int64, defVoltage string) (model.HVFeeder, error) {
+	f := model.HVFeeder{
+		ID: id, NetworkID: networkID,
+		Name:    strings.ToUpper(strings.TrimSpace(in.Name)),
+		Voltage: strings.TrimSpace(in.Voltage),
+		Source:  strings.TrimSpace(in.Source),
+		RatingA: in.RatingA,
+	}
+	if err := required("Feeder name", f.Name); err != nil {
+		return f, err
+	}
+	if f.Voltage == "" {
+		f.Voltage = defVoltage
+	}
+	if f.RatingA != nil && (*f.RatingA <= 0 || *f.RatingA > 100000) {
+		return f, &db.UserError{Msg: "Rating must be between 0 and 100000 A."}
+	}
+	return f, nil
+}
+
+func (s *Server) handleHVFeederCreate(w http.ResponseWriter, r *http.Request) {
+	var in hvFeederInput
+	if err := decode(r, &in); err != nil {
+		fail(w, err)
+		return
+	}
+	n, err := s.Store.HVNetwork(ctx(r))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	f, err := in.toModel(0, n.ID, n.Voltage)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	id, err := s.Store.CreateHVFeeder(ctx(r), roleOf(r), f)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 201, map[string]int64{"id": id})
+}
+
+func (s *Server) handleHVFeederUpdate(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	var in hvFeederInput
+	if err := decode(r, &in); err != nil {
+		fail(w, err)
+		return
+	}
+	f, err := in.toModel(id, 0, "22kV")
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if err := s.Store.UpdateHVFeeder(ctx(r), roleOf(r), f); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+func (s *Server) handleHVFeederDelete(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if err := s.Store.DeleteHVFeeder(ctx(r), roleOf(r), id); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+func (s *Server) handleHVFeederMove(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	var in struct {
+		Delta int `json:"delta"`
+	}
+	if err := decode(r, &in); err != nil {
+		fail(w, err)
+		return
+	}
+	if in.Delta != 1 && in.Delta != -1 {
+		fail(w, &db.UserError{Msg: "Move one place at a time."})
+		return
+	}
+	if err := s.Store.MoveHVFeeder(ctx(r), roleOf(r), id, in.Delta); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+// Ways --------------------------------------------------------------------
+
+type hvWayInput struct {
+	FeederID int64    `json:"feeder_id"`
+	Name     string   `json:"name"`
+	RatingA  *float64 `json:"rating_a"`
+
+	Protection     string `json:"protection"`
+	ProtectionNote string `json:"protection_note"`
+
+	HasTransformer   bool     `json:"has_transformer"`
+	TransformerName  string   `json:"transformer_name"`
+	TransformerKVA   *float64 `json:"transformer_kva"`
+	TransformerRatio string   `json:"transformer_ratio"`
+
+	DestBoardID *int64 `json:"dest_board_id"`
+	DestLabel   string `json:"dest_label"`
+	Notes       string `json:"notes"`
+}
+
+func (in hvWayInput) toModel(id int64) (model.HVWay, error) {
+	w := model.HVWay{
+		ID: id, FeederID: in.FeederID,
+		Name:             strings.TrimSpace(in.Name),
+		RatingA:          in.RatingA,
+		Protection:       strings.ToLower(strings.TrimSpace(in.Protection)),
+		ProtectionNote:   strings.TrimSpace(in.ProtectionNote),
+		HasTransformer:   in.HasTransformer,
+		TransformerName:  strings.TrimSpace(in.TransformerName),
+		TransformerKVA:   in.TransformerKVA,
+		TransformerRatio: strings.TrimSpace(in.TransformerRatio),
+		DestBoardID:      in.DestBoardID,
+		DestLabel:        strings.TrimSpace(in.DestLabel),
+		Notes:            strings.TrimSpace(in.Notes),
+	}
+	if err := required("Way name", w.Name); err != nil {
+		return w, err
+	}
+	if w.Protection == "" {
+		w.Protection = model.ProtectionNone
+	}
+	if !model.ValidProtection(w.Protection) {
+		return w, &db.UserError{Msg: "Protection must be none, RCCB, ELR or ELCB."}
+	}
+	if w.RatingA != nil && (*w.RatingA <= 0 || *w.RatingA > 100000) {
+		return w, &db.UserError{Msg: "Rating must be between 0 and 100000 A."}
+	}
+	if w.TransformerKVA != nil && (*w.TransformerKVA <= 0 || *w.TransformerKVA > 1000000) {
+		return w, &db.UserError{Msg: "Transformer rating must be between 0 and 1000000 kVA."}
+	}
+	// A destination board carries its own name, so a separate label would only
+	// contradict it.
+	if w.DestBoardID != nil && *w.DestBoardID == 0 {
+		w.DestBoardID = nil
+	}
+	if w.DestBoardID != nil {
+		w.DestLabel = ""
+	}
+	return w, nil
+}
+
+func (s *Server) handleHVWayCreate(w http.ResponseWriter, r *http.Request) {
+	var in hvWayInput
+	if err := decode(r, &in); err != nil {
+		fail(w, err)
+		return
+	}
+	way, err := in.toModel(0)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if way.FeederID <= 0 {
+		fail(w, &db.UserError{Msg: "Feeder is required."})
+		return
+	}
+	id, err := s.Store.CreateHVWay(ctx(r), roleOf(r), way)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 201, map[string]int64{"id": id})
+}
+
+func (s *Server) handleHVWayUpdate(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	var in hvWayInput
+	if err := decode(r, &in); err != nil {
+		fail(w, err)
+		return
+	}
+	way, err := in.toModel(id)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if err := s.Store.UpdateHVWay(ctx(r), roleOf(r), way); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+func (s *Server) handleHVWayDelete(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if err := s.Store.DeleteHVWay(ctx(r), roleOf(r), id); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+// Couplers ----------------------------------------------------------------
+
+type hvCouplerInput struct {
+	Name    string   `json:"name"`
+	LeftID  int64    `json:"left_id"`
+	RightID int64    `json:"right_id"`
+	Closed  bool     `json:"closed"`
+	RatingA *float64 `json:"rating_a"`
+}
+
+func (in hvCouplerInput) toModel(id, networkID int64) (model.HVCoupler, error) {
+	c := model.HVCoupler{
+		ID: id, NetworkID: networkID,
+		Name:   strings.ToUpper(strings.TrimSpace(in.Name)),
+		LeftID: in.LeftID, RightID: in.RightID, Closed: in.Closed, RatingA: in.RatingA,
+	}
+	if err := required("Coupler name", c.Name); err != nil {
+		return c, err
+	}
+	if c.LeftID <= 0 || c.RightID <= 0 {
+		return c, &db.UserError{Msg: "Choose the two feeders the coupler ties together."}
+	}
+	if c.LeftID == c.RightID {
+		return c, &db.UserError{Msg: "A coupler must join two different feeders."}
+	}
+	return c, nil
+}
+
+func (s *Server) handleHVCouplerCreate(w http.ResponseWriter, r *http.Request) {
+	var in hvCouplerInput
+	if err := decode(r, &in); err != nil {
+		fail(w, err)
+		return
+	}
+	n, err := s.Store.HVNetwork(ctx(r))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	c, err := in.toModel(0, n.ID)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	id, err := s.Store.CreateHVCoupler(ctx(r), roleOf(r), c)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 201, map[string]int64{"id": id})
+}
+
+func (s *Server) handleHVCouplerUpdate(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	var in hvCouplerInput
+	if err := decode(r, &in); err != nil {
+		fail(w, err)
+		return
+	}
+	c, err := in.toModel(id, 0)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if err := s.Store.UpdateHVCoupler(ctx(r), roleOf(r), c); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+func (s *Server) handleHVCouplerDelete(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if err := s.Store.DeleteHVCoupler(ctx(r), roleOf(r), id); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}

@@ -326,6 +326,18 @@ table.grid td.bar-cell .bar { width: 90px; display: inline-block; vertical-align
 .sld-hint { margin: 0 0 12px; font-size: 13px; color: var(--muted); background: var(--primary-soft); border-radius: 8px; padding: 9px 14px; }
 .sld-hint b { color: var(--primary-dark); }
 
+/* ------------------------------------------------------------------ HV overview */
+.hv-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; flex-wrap: wrap; margin-bottom: 14px; }
+.hv-title { margin: 0; font-family: var(--mono); font-size: 22px; font-weight: 700; color: var(--primary); }
+.hv-counts { display: flex; gap: 24px; }
+.hv-counts div { text-align: center; }
+.hv-counts .n { font-family: var(--mono); font-weight: 700; font-size: 19px; }
+.hv-counts .l { font-size: 11px; color: var(--muted); }
+.hv-toolbar { display: flex; gap: 10px; margin-bottom: 12px; }
+.hv-node { cursor: pointer; }
+.hv-node:hover rect { filter: brightness(.97); }
+.hv-linked:hover rect { fill: #e3f5ea; }
+
 /* ------------------------------------------------------------------ activity */
 .activity-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
 .act-action { font-family: var(--mono); font-size: 11px; font-weight: 700; padding: 2px 6px; border-radius: 4px; background: var(--grey-soft); text-transform: uppercase; }

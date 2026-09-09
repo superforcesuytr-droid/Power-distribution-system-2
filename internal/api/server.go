@@ -92,6 +92,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/circuits/{id}", s.requireRole(model.RoleTechnician, s.handleCircuitUpdate))
 	mux.HandleFunc("DELETE /api/circuits/{id}", s.requireRole(model.RoleSupervisor, s.handleCircuitDelete))
 
+	s.routesHV(mux)
+
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "unknown API route")
 	})

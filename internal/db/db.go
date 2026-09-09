@@ -805,6 +805,10 @@ func translate(err error) error {
 				return &UserError{"An MCCB with that name already exists on this board."}
 			case "mcbs_mccb_id_name_key":
 				return &UserError{"An MCB with that name already exists under this MCCB."}
+			case "hv_feeders_network_id_name_key":
+				return &UserError{"A feeder with that name already exists."}
+			case "hv_ways_feeder_id_name_key":
+				return &UserError{"A way with that name already exists on this feeder."}
 			}
 			return &UserError{"Duplicate value: " + pgErr.Detail}
 		case "23503":
