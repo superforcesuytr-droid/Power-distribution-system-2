@@ -548,10 +548,11 @@ func (s *Store) loadTrees(ctx context.Context, boardID int64) ([]model.BoardDeta
 	// Order everything the way an engineer reads a schedule - FAC1, FAC2, FAC10 -
 	// rather than by when each row happened to be created, so a board added
 	// today takes its place in the sequence instead of landing at the bottom.
+	// Ordered by code alone rather than by building first. Views that group by
+	// building filter this list themselves, so they still read in order, while
+	// the flat lists - the diagram's board chips, the board grid, the pickers -
+	// no longer interleave one building's codes with another's.
 	sort.SliceStable(boards, func(i, j int) bool {
-		if boards[i].BuildingID != boards[j].BuildingID {
-			return boards[i].BuildingID < boards[j].BuildingID
-		}
 		return model.NaturalLess(boards[i].Code, boards[j].Code)
 	})
 	for i := range boards {
