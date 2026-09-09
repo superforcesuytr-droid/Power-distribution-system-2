@@ -52,16 +52,19 @@ type HVNetwork struct {
 
 // HVFeeder is one incoming supply and the switchgear bus it feeds.
 type HVFeeder struct {
-	ID        int64     `json:"id"`
-	NetworkID int64     `json:"network_id"`
-	Name      string    `json:"name"`
-	Voltage   string    `json:"voltage"`
-	Source    string    `json:"source"`
-	RatingA   *float64  `json:"rating_a"`
-	Position  int       `json:"position"`
-	Ways      []HVWay   `json:"ways"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID        int64  `json:"id"`
+	NetworkID int64  `json:"network_id"`
+	Name      string `json:"name"`
+	// Switchgear is the designation written beside the breaker symbol, such as
+	// 22SGI1, as distinct from the feeder's own name.
+	Switchgear string    `json:"switchgear"`
+	Voltage    string    `json:"voltage"`
+	Source     string    `json:"source"`
+	RatingA    *float64  `json:"rating_a"`
+	Position   int       `json:"position"`
+	Ways       []HVWay   `json:"ways"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 // HVWay is an outgoing way from a feeder's switchgear: optionally protected,

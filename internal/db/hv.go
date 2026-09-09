@@ -30,7 +30,7 @@ func (s *Store) HVNetwork(ctx context.Context) (*model.HVNetwork, error) {
 	n.Feeders = []model.HVFeeder{}
 	n.Couplers = []model.HVCoupler{}
 
-	rows, err := pool.Query(ctx, `SELECT id, network_id, name, voltage, source, rating_a, position, created_at, updated_at
+	rows, err := pool.Query(ctx, `SELECT id, network_id, name, switchgear, voltage, source, rating_a, position, created_at, updated_at
 		FROM hv_feeders WHERE network_id = $1 ORDER BY position, name`, n.ID)
 	if err != nil {
 		return nil, err
@@ -38,7 +38,7 @@ func (s *Store) HVNetwork(ctx context.Context) (*model.HVNetwork, error) {
 	index := map[int64]int{}
 	for rows.Next() {
 		var f model.HVFeeder
-		if err := rows.Scan(&f.ID, &f.NetworkID, &f.Name, &f.Voltage, &f.Source, &f.RatingA, &f.Position,
+		if err := rows.Scan(&f.ID, &f.NetworkID, &f.Name, &f.Switchgear, &f.Voltage, &f.Source, &f.RatingA, &f.Position,
 			&f.CreatedAt, &f.UpdatedAt); err != nil {
 			rows.Close()
 			return nil, err
@@ -137,9 +137,9 @@ func (s *Store) UpdateHVNetwork(ctx context.Context, role string, id int64, name
 func (s *Store) CreateHVFeeder(ctx context.Context, role string, f model.HVFeeder) (int64, error) {
 	var id int64
 	err := s.withTx(ctx, func(tx pgx.Tx) error {
-		if err := tx.QueryRow(ctx, `INSERT INTO hv_feeders (network_id, name, voltage, source, rating_a, position)
-			VALUES ($1,$2,$3,$4,$5,(SELECT coalesce(max(position),-1)+1 FROM hv_feeders WHERE network_id = $1))
-			RETURNING id`, f.NetworkID, f.Name, f.Voltage, f.Source, f.RatingA).Scan(&id); err != nil {
+		if err := tx.QueryRow(ctx, `INSERT INTO hv_feeders (network_id, name, switchgear, voltage, source, rating_a, position)
+			VALUES ($1,$2,$3,$4,$5,$6,(SELECT coalesce(max(position),-1)+1 FROM hv_feeders WHERE network_id = $1))
+			RETURNING id`, f.NetworkID, f.Name, f.Switchgear, f.Voltage, f.Source, f.RatingA).Scan(&id); err != nil {
 			return err
 		}
 		return s.audit(ctx, tx, role, "create", "hv_feeder", id, "Added feeder "+f.Name)
@@ -149,8 +149,8 @@ func (s *Store) CreateHVFeeder(ctx context.Context, role string, f model.HVFeede
 
 func (s *Store) UpdateHVFeeder(ctx context.Context, role string, f model.HVFeeder) error {
 	return s.withTx(ctx, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `UPDATE hv_feeders SET name = $2, voltage = $3, source = $4, rating_a = $5,
-			updated_at = now() WHERE id = $1`, f.ID, f.Name, f.Voltage, f.Source, f.RatingA)
+		tag, err := tx.Exec(ctx, `UPDATE hv_feeders SET name = $2, switchgear = $3, voltage = $4, source = $5,
+			rating_a = $6, updated_at = now() WHERE id = $1`, f.ID, f.Name, f.Switchgear, f.Voltage, f.Source, f.RatingA)
 		if err != nil {
 			return err
 		}

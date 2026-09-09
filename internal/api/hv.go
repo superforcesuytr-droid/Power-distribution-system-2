@@ -72,19 +72,21 @@ func (s *Server) handleHVUpdate(w http.ResponseWriter, r *http.Request) {
 // Feeders -----------------------------------------------------------------
 
 type hvFeederInput struct {
-	Name    string   `json:"name"`
-	Voltage string   `json:"voltage"`
-	Source  string   `json:"source"`
-	RatingA *float64 `json:"rating_a"`
+	Name       string   `json:"name"`
+	Switchgear string   `json:"switchgear"`
+	Voltage    string   `json:"voltage"`
+	Source     string   `json:"source"`
+	RatingA    *float64 `json:"rating_a"`
 }
 
 func (in hvFeederInput) toModel(id, networkID int64, defVoltage string) (model.HVFeeder, error) {
 	f := model.HVFeeder{
 		ID: id, NetworkID: networkID,
-		Name:    strings.ToUpper(strings.TrimSpace(in.Name)),
-		Voltage: strings.TrimSpace(in.Voltage),
-		Source:  strings.TrimSpace(in.Source),
-		RatingA: in.RatingA,
+		Name:       strings.ToUpper(strings.TrimSpace(in.Name)),
+		Switchgear: strings.ToUpper(strings.TrimSpace(in.Switchgear)),
+		Voltage:    strings.TrimSpace(in.Voltage),
+		Source:     strings.TrimSpace(in.Source),
+		RatingA:    in.RatingA,
 	}
 	if err := required("Feeder name", f.Name); err != nil {
 		return f, err

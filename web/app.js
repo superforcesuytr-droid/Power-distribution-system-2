@@ -843,7 +843,7 @@
     // Room enough below the switchgear label for the "+ Way" control to sit
     // just above the bar without covering it.
     const busY = swY + 88;          // the busbar every feeder lands on
-    const wayTapY = busY + 30;      // outgoing breaker
+    const wayTapY = busY + 56;      // outgoing breaker, with room for its label
     const protY = wayTapY + 52;     // protection device, when fitted
     const txY = protY + 62;         // transformer, when fitted
     const destY = txY + 82;         // destination box
@@ -863,21 +863,21 @@
       const f = g.f, cx = centers[gi];
       // The X is the switchgear, not a symbol wired to a box: its name sits
       // beside it, and both the symbol and the name open its settings.
-      out.push(`<text x="${cx}" y="${feederY}" text-anchor="middle" font-size="13" font-weight="600" fill="${C.label}" letter-spacing="1">${esc(f.voltage)}${f.source ? ' · ' + esc(f.source).toUpperCase() : ''}</text>`);
-      out.push(`<line x1="${cx}" y1="${feederY + 12}" x2="${cx}" y2="${busY}" stroke="${C.bus}" stroke-width="3"/>`);
+      out.push(`<text x="${cx}" y="${feederY}" text-anchor="middle" font-size="19" font-weight="700" fill="${C.label}">${esc(f.name)}</text>`);
+      out.push(`<text x="${cx}" y="${feederY + 18}" text-anchor="middle" font-size="12" font-weight="600" fill="${C.muted}" letter-spacing=".8">${esc(f.voltage)}${f.source ? ' · ' + esc(f.source).toUpperCase() : ''}</text>`);
+      out.push(`<line x1="${cx}" y1="${feederY + 28}" x2="${cx}" y2="${busY}" stroke="${C.bus}" stroke-width="3"/>`);
       const swAct = canManage() ? `data-action="hv-edit-feeder" data-id="${f.id}"` : '';
-      const nameEnd = cx + 24 + Math.max(28, f.name.length * 11);
       out.push(`<g class="${swAct ? 'hv-node' : ''}" id="hv-feeder-${f.id}" ${swAct}>
-        <title>${esc(f.name)} switchgear${canManage() ? ' - click to rename or re-rate' : ''}</title>
-        <rect x="${cx - 20}" y="${swY - 24}" width="${nameEnd - cx + 30}" height="48" fill="transparent"/>
+        <title>${esc(f.switchgear || f.name)} switchgear${canManage() ? ' - click to edit' : ''}</title>
+        <rect x="${cx - 74}" y="${swY - 30}" width="110" height="60" fill="transparent"/>
         ${hvBreaker(cx, swY, C.bus)}
-        <text x="${cx + 22}" y="${swY - 1}" font-size="18" font-weight="700" fill="${C.bus}">${esc(f.name)}</text>
-        <text x="${cx + 22}" y="${swY + 16}" font-size="11" fill="${C.muted}">${esc(f.voltage)}${f.rating_a ? ' · ' + fmtA(f.rating_a) + ' A' : ''}</text>
+        ${hvTag(cx - 15, swY + 26, f.switchgear || f.name, C.label, 13)}
+        ${f.rating_a ? `<text x="${cx + 20}" y="${swY + 5}" font-size="11" fill="${C.muted}">${fmtA(f.rating_a)} A</text>` : ''}
       </g>`);
       if (canManage()) {
-        out.push(`<g class="sld-btn" data-action="hv-edit-feeder" data-id="${f.id}"><title>Rename ${esc(f.name)}</title>
-          <rect x="${nameEnd}" y="${swY - 22}" width="24" height="24" rx="7" fill="#fff" stroke="${C.bus}" stroke-opacity=".4"/>
-          <g transform="translate(${nameEnd + 2} ${swY - 20})" fill="none" stroke="${C.bus}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${SLD_ICONS.edit}</g></g>`);
+        out.push(`<g class="sld-btn" data-action="hv-edit-feeder" data-id="${f.id}"><title>Edit ${esc(f.name)}</title>
+          <rect x="${cx + 20}" y="${swY - 30}" width="24" height="24" rx="7" fill="#fff" stroke="${C.bus}" stroke-opacity=".4"/>
+          <g transform="translate(${cx + 22} ${swY - 28})" fill="none" stroke="${C.bus}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${SLD_ICONS.edit}</g></g>`);
       }
 
       if (!f.ways.length) {
@@ -892,8 +892,8 @@
         out.push(`<circle cx="${wx}" cy="${busY}" r="4.5" fill="${C.bus}"/>`);
         out.push(`<line x1="${wx}" y1="${busY}" x2="${wx}" y2="${destY}" stroke="${C.line}" stroke-width="2.5"/>`);
         out.push(hvBreaker(wx, wayTapY, C.line));
-        out.push(`<text x="${wx + 20}" y="${wayTapY - 4}" font-size="12" font-weight="700" fill="#1c2733">${esc(way.name)}</text>`);
-        if (way.rating_a) out.push(`<text x="${wx + 20}" y="${wayTapY + 11}" font-size="11" fill="${C.muted}">${fmtA(way.rating_a)} A</text>`);
+        out.push(hvTag(wx - 15, wayTapY + 26, way.name, C.label, 12));
+        if (way.rating_a) out.push(`<text x="${wx + 18}" y="${wayTapY + 5}" font-size="11" fill="${C.muted}">${fmtA(way.rating_a)} A</text>`);
 
         const prot = PROT_LABEL[way.protection];
         if (prot) {
@@ -937,8 +937,10 @@
         }
       });
 
+      // Offset from the centre so the control does not sit on the conductor
+      // dropping from the switchgear into the busbar.
       if (canEdit()) {
-        out.push(sldPill(cx, busY + (n ? -30 : 70), 78, '+ Way', `data-action="hv-add-way" data-id="${f.id}"`, C.bus, 'Add an outgoing way to ' + f.name));
+        out.push(sldPill(cx + 76, busY - 26, 78, '+ Way', `data-action="hv-add-way" data-id="${f.id}"`, C.bus, 'Add an outgoing way to ' + f.name));
       }
     });
 
@@ -968,6 +970,15 @@
     // Switchgear is drawn the way it is on a single line diagram: the conductor
     // is broken and an X marks the breaker. The masking rectangle is what
     // breaks the line, so the X reads as a device rather than an asterisk.
+    // Designations on a single line diagram are written up the side of the
+    // conductor rather than across it, so the drawing stays narrow however many
+    // ways there are. Anchored below the symbol, the text reads upward.
+    function hvTag(x, y, text, col, size) {
+      if (!text) return '';
+      return `<text x="${x}" y="${y}" transform="rotate(-90 ${x} ${y})" text-anchor="start"
+        font-size="${size || 12}" font-weight="700" fill="${col}" letter-spacing=".5">${esc(text)}</text>`;
+    }
+
     function hvBreaker(cx, cy, col) {
       const r = 11;
       return `<rect x="${cx - r - 2}" y="${cy - r - 2}" width="${(r + 2) * 2}" height="${(r + 2) * 2}" fill="#fff"/>
@@ -1238,12 +1249,13 @@
   function hvFeederForm(f) {
     const isEdit = !!(f && f.id);
     formModal(isEdit ? 'Edit feeder ' + f.name : 'Add feeder', `
-      ${field('Feeder name', 'name', isEdit ? f.name : hvNextFeederName(), { required: true, placeholder: 'F5', attrs: 'style="text-transform:uppercase"' })}
+      ${field('Feeder name', 'name', isEdit ? f.name : hvNextFeederName(), { required: true, placeholder: 'F5', hint: 'Written above the incoming line.', attrs: 'style="text-transform:uppercase"' })}
+      ${field('Switchgear designation', 'switchgear', isEdit ? (f.switchgear || '') : '', { placeholder: '22SGI5', hint: 'Written up the side of the breaker.', attrs: 'style="text-transform:uppercase"' })}
       ${field('Voltage', 'voltage', isEdit ? f.voltage : (state.hv.voltage || '22kV'), { placeholder: '22kV' })}
       ${field('Source', 'source', isEdit ? f.source : '', { full: true, placeholder: 'e.g. Incoming supply 5, intake substation' })}
       ${field('Switchgear rating (A)', 'rating_a', isEdit && f.rating_a != null ? f.rating_a : '', { type: 'number', attrs: 'min="0" max="100000" step="any"', hint: 'Optional' })}`,
       async d => {
-        const body = { name: d.name, voltage: d.voltage, source: d.source, rating_a: d.rating_a === '' ? null : Number(d.rating_a) };
+        const body = { name: d.name, switchgear: d.switchgear, voltage: d.voltage, source: d.source, rating_a: d.rating_a === '' ? null : Number(d.rating_a) };
         if (isEdit) { state.focus = 'hv-feeder-' + f.id; await api('PUT', '/api/hv/feeders/' + f.id, body); await afterChange('Feeder updated'); }
         else { const r = await api('POST', '/api/hv/feeders', body); state.focus = 'hv-feeder-' + r.id; await afterChange('Feeder added'); }
       },
