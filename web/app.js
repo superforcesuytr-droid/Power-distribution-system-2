@@ -750,11 +750,11 @@
     groups.forEach((g, i) => { byId[g.f.id] = { g, cx: centers[i], i }; });
 
     // Vertical bands, top to bottom.
-    const feederY = 40;            // "F1  22kV" label
-    const swY = feederY + 66;       // incoming isolator
-    const panelY = swY + 34;        // switchgear panel box
-    const PANEL_H = 62;
-    const busY = panelY + PANEL_H + 46;   // the feeder's busbar
+    const feederY = 40;            // the incoming supply annotation
+    const swY = feederY + 54;       // the switchgear itself, drawn as an X
+    // Room enough below the switchgear label for the "+ Way" control to sit
+    // just above the bar without covering it.
+    const busY = swY + 88;          // the busbar every feeder lands on
     const wayTapY = busY + 30;      // outgoing breaker
     const protY = wayTapY + 52;     // protection device, when fitted
     const txY = protY + 62;         // transformer, when fitted
@@ -773,18 +773,24 @@
 
     groups.forEach((g, gi) => {
       const f = g.f, cx = centers[gi];
-      // Incoming supply, isolator and switchgear panel.
-      out.push(`<text x="${cx}" y="${feederY}" text-anchor="middle" font-size="19" font-weight="700" fill="${C.bus}">${esc(f.name)}</text>`);
-      out.push(`<text x="${cx}" y="${feederY + 18}" text-anchor="middle" font-size="11" fill="${C.muted}" letter-spacing="1.2">${esc(f.voltage)}${f.source ? ' · ' + esc(f.source).toUpperCase() : ''}</text>`);
-      out.push(`<line x1="${cx}" y1="${feederY + 26}" x2="${cx}" y2="${panelY}" stroke="${C.bus}" stroke-width="3"/>`);
-      out.push(hvBreaker(cx, swY, C.bus));
-      out.push(`<g class="hv-node" id="hv-feeder-${f.id}" data-action="hv-edit-feeder" data-id="${f.id}">
-        <title>${esc(f.name)} switchgear${canManage() ? ' - click to edit' : ''}</title>
-        <rect x="${cx - 96}" y="${panelY}" width="192" height="${PANEL_H}" rx="9" fill="#f7fbfd" stroke="${C.bus}" stroke-width="2.5"/>
-        <text x="${cx}" y="${panelY + 24}" text-anchor="middle" font-size="11" fill="${C.muted}" letter-spacing="1.4">SWITCHGEAR</text>
-        <text x="${cx}" y="${panelY + 45}" text-anchor="middle" font-size="15" font-weight="700" fill="#1c2733">${esc(f.voltage)}${f.rating_a ? ' · ' + fmtA(f.rating_a) + ' A' : ''}</text>
+      // The X is the switchgear, not a symbol wired to a box: its name sits
+      // beside it, and both the symbol and the name open its settings.
+      out.push(`<text x="${cx}" y="${feederY}" text-anchor="middle" font-size="11" fill="${C.muted}" letter-spacing="1.2">${esc(f.voltage)}${f.source ? ' · ' + esc(f.source).toUpperCase() : ''}</text>`);
+      out.push(`<line x1="${cx}" y1="${feederY + 12}" x2="${cx}" y2="${busY}" stroke="${C.bus}" stroke-width="3"/>`);
+      const swAct = canManage() ? `data-action="hv-edit-feeder" data-id="${f.id}"` : '';
+      const nameEnd = cx + 24 + Math.max(28, f.name.length * 11);
+      out.push(`<g class="${swAct ? 'hv-node' : ''}" id="hv-feeder-${f.id}" ${swAct}>
+        <title>${esc(f.name)} switchgear${canManage() ? ' - click to rename or re-rate' : ''}</title>
+        <rect x="${cx - 20}" y="${swY - 24}" width="${nameEnd - cx + 30}" height="48" fill="transparent"/>
+        ${hvBreaker(cx, swY, C.bus)}
+        <text x="${cx + 22}" y="${swY - 1}" font-size="18" font-weight="700" fill="${C.bus}">${esc(f.name)}</text>
+        <text x="${cx + 22}" y="${swY + 16}" font-size="11" fill="${C.muted}">${esc(f.voltage)}${f.rating_a ? ' · ' + fmtA(f.rating_a) + ' A' : ''}</text>
       </g>`);
-      out.push(`<line x1="${cx}" y1="${panelY + PANEL_H}" x2="${cx}" y2="${busY}" stroke="${C.bus}" stroke-width="3"/>`);
+      if (canManage()) {
+        out.push(`<g class="sld-btn" data-action="hv-edit-feeder" data-id="${f.id}"><title>Rename ${esc(f.name)}</title>
+          <rect x="${nameEnd}" y="${swY - 22}" width="24" height="24" rx="7" fill="#fff" stroke="${C.bus}" stroke-opacity=".4"/>
+          <g transform="translate(${nameEnd + 2} ${swY - 20})" fill="none" stroke="${C.bus}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${SLD_ICONS.edit}</g></g>`);
+      }
 
       if (!f.ways.length) {
         out.push(`<text x="${cx}" y="${busY + 40}" text-anchor="middle" font-size="12" fill="${C.muted}">No outgoing ways yet</text>`);
