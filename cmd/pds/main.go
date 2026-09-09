@@ -21,6 +21,7 @@ import (
 	"github.com/superforcesuytr-droid/power-distribution-system/internal/api"
 	"github.com/superforcesuytr-droid/power-distribution-system/internal/config"
 	"github.com/superforcesuytr-droid/power-distribution-system/internal/db"
+	"github.com/superforcesuytr-droid/power-distribution-system/internal/instance"
 	"github.com/superforcesuytr-droid/power-distribution-system/internal/logging"
 	"github.com/superforcesuytr-droid/power-distribution-system/internal/window"
 	"github.com/superforcesuytr-droid/power-distribution-system/web"
@@ -54,6 +55,16 @@ func main() {
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		log.Printf("warning: %v (continuing with defaults)", err)
+	}
+
+	// Launching the application while a copy is already serving should show
+	// that copy rather than start a second server against the same database.
+	if !*headless {
+		if existing, ok := instance.Existing(config.Dir(cfgPath)); ok {
+			log.Printf("already running at %s; showing that window instead of starting again", existing)
+			window.OpenBrowser(existing)
+			return
+		}
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -98,6 +109,8 @@ func main() {
 		}
 	}()
 	log.Printf("serving UI at %s", url)
+	releaseInstance := instance.Acquire(config.Dir(cfgPath), url)
+	defer releaseInstance()
 
 	switch {
 	case *headless:

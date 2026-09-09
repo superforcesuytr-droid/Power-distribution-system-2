@@ -89,6 +89,8 @@ written beside the config file.
 
 The app has no Dock icon of its own, because the window it opens belongs to the
 browser hosting the interface. **Closing that window quits the application.**
+Opening the app again while it is already running reveals the window that is
+already there rather than starting a second copy against the same database.
 
 Settings are saved to `~/Library/Application Support/PowerDistribution/config.json`,
 with the log file beside it. To see the log:
