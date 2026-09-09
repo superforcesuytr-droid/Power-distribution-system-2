@@ -306,28 +306,45 @@ func (s *Server) handleHVWayDelete(w http.ResponseWriter, r *http.Request) {
 
 type hvCouplerInput struct {
 	Name    string   `json:"name"`
-	LeftID  int64    `json:"left_id"`
-	RightID int64    `json:"right_id"`
+	AfterID int64    `json:"after_id"`
 	Closed  bool     `json:"closed"`
 	RatingA *float64 `json:"rating_a"`
 }
 
-func (in hvCouplerInput) toModel(id, networkID int64) (model.HVCoupler, error) {
+// couplerModel places a coupler in the gap that follows a feeder. Every feeder
+// sits on one busbar, so where the coupler goes is a single choice; the section
+// on its right is whichever feeder comes next, and is resolved here rather than
+// asked for, which keeps the two from ever disagreeing.
+func (s *Server) couplerModel(r *http.Request, in hvCouplerInput, id int64) (model.HVCoupler, error) {
 	c := model.HVCoupler{
-		ID: id, NetworkID: networkID,
-		Name:   strings.ToUpper(strings.TrimSpace(in.Name)),
-		LeftID: in.LeftID, RightID: in.RightID, Closed: in.Closed, RatingA: in.RatingA,
+		ID:      id,
+		Name:    strings.ToUpper(strings.TrimSpace(in.Name)),
+		Closed:  in.Closed,
+		RatingA: in.RatingA,
 	}
 	if err := required("Coupler name", c.Name); err != nil {
 		return c, err
 	}
-	if c.LeftID <= 0 || c.RightID <= 0 {
-		return c, &db.UserError{Msg: "Choose the two feeders the coupler ties together."}
+	n, err := s.Store.HVNetwork(ctx(r))
+	if err != nil {
+		return c, err
 	}
-	if c.LeftID == c.RightID {
-		return c, &db.UserError{Msg: "A coupler must join two different feeders."}
+	c.NetworkID = n.ID
+	if in.AfterID <= 0 {
+		return c, &db.UserError{Msg: "Choose where on the busbar the coupler sits."}
 	}
-	return c, nil
+	for i, f := range n.Feeders {
+		if f.ID != in.AfterID {
+			continue
+		}
+		if i+1 >= len(n.Feeders) {
+			return c, &db.UserError{Msg: "There is no feeder after " + f.Name + ", so a coupler cannot sit there."}
+		}
+		c.LeftID = f.ID
+		c.RightID = n.Feeders[i+1].ID
+		return c, nil
+	}
+	return c, &db.UserError{Msg: "That feeder is no longer on the busbar."}
 }
 
 func (s *Server) handleHVCouplerCreate(w http.ResponseWriter, r *http.Request) {
@@ -336,12 +353,7 @@ func (s *Server) handleHVCouplerCreate(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	n, err := s.Store.HVNetwork(ctx(r))
-	if err != nil {
-		fail(w, err)
-		return
-	}
-	c, err := in.toModel(0, n.ID)
+	c, err := s.couplerModel(r, in, 0)
 	if err != nil {
 		fail(w, err)
 		return
@@ -365,7 +377,7 @@ func (s *Server) handleHVCouplerUpdate(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	c, err := in.toModel(id, 0)
+	c, err := s.couplerModel(r, in, id)
 	if err != nil {
 		fail(w, err)
 		return

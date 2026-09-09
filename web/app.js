@@ -1222,15 +1222,18 @@
   function hvCouplerForm(c) {
     const isEdit = !!(c && c.id);
     const feeders = state.hv.feeders;
-    const opts = feeders.map(f => ({ value: f.id, label: f.name }));
+    // Every feeder sits on one busbar, so a coupler needs only a position on
+    // it: the gap after a feeder. Naming both sides would be the same choice
+    // twice over, and could be set to disagree.
+    const gaps = feeders.slice(0, -1).map((f, i) => ({ value: f.id, label: `Between ${f.name} and ${feeders[i + 1].name}` }));
+    if (!gaps.length) { toast('Add a second feeder before adding a coupler.', 'error'); return; }
     formModal(isEdit ? 'Edit coupler ' + c.name : 'Add bus coupler', `
       ${field('Coupler name', 'name', isEdit ? c.name : 'BC-' + (state.hv.couplers.length + 1), { required: true, attrs: 'style="text-transform:uppercase"' })}
       ${field('Rating (A)', 'rating_a', isEdit && c.rating_a != null ? c.rating_a : '', { type: 'number', attrs: 'min="0" max="100000" step="any"', hint: 'Optional' })}
-      ${field('Ties this feeder', 'left_id', isEdit ? c.left_id : (opts[0] || {}).value, { type: 'select', required: true, options: opts })}
-      ${field('To this feeder', 'right_id', isEdit ? c.right_id : (opts[1] || {}).value, { type: 'select', required: true, options: opts })}
-      <div class="field inline full"><input type="checkbox" name="closed" id="cp_closed" ${isEdit && c.closed ? 'checked' : ''}><label for="cp_closed">Coupler is closed (the two busbars are tied together)</label></div>`,
+      ${field('Position on the busbar', 'after_id', isEdit ? c.left_id : gaps[0].value, { type: 'select', required: true, full: true, options: gaps, hint: 'Where the coupler splits the bar into two sections.' })}
+      <div class="field inline full"><input type="checkbox" name="closed" id="cp_closed" ${isEdit && c.closed ? 'checked' : ''}><label for="cp_closed">Coupler is closed (the sections either side are tied together)</label></div>`,
       async d => {
-        const body = { name: d.name, left_id: Number(d.left_id), right_id: Number(d.right_id), closed: d.closed === 'on',
+        const body = { name: d.name, after_id: Number(d.after_id), closed: d.closed === 'on',
           rating_a: d.rating_a === '' ? null : Number(d.rating_a) };
         if (isEdit) { await api('PUT', '/api/hv/couplers/' + c.id, body); await afterChange('Coupler updated'); }
         else { await api('POST', '/api/hv/couplers', body); await afterChange('Coupler added'); }
