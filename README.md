@@ -1,11 +1,13 @@
 # Power Distribution System
 
-A Windows desktop application (`PowerDistributionSystem.exe`) for managing an
-electrical distribution network - buildings, distribution boards, MCCBs, MCBs and
-final circuits - with all data stored in **PostgreSQL**.
+A desktop application for managing an electrical distribution network -
+buildings, distribution boards, MCCBs, MCBs and final circuits - with all data
+stored in **PostgreSQL**. It ships as `PowerDistributionSystem.exe` on Windows
+and `PowerDistributionSystem.app` on macOS.
 
-The executable is fully self-contained: one file, no runtime to install. It shows
-the interface in a native window and talks to your PostgreSQL server directly.
+The application is self-contained: no runtime to install and nothing to deploy.
+It shows the interface in its own window and talks to your PostgreSQL server
+directly.
 
 ![Dashboard](docs/screenshot-dashboard.png)
 
@@ -43,9 +45,12 @@ The single line diagram is drawn from the same data and can be edited directly:
 | Component  | Requirement |
 |------------|-------------|
 | Windows    | Windows 10 (21H2 or later) or Windows 11, 64-bit. Uses the Microsoft Edge WebView2 runtime that ships with Windows; if it is missing the app opens in your default browser instead. |
-| PostgreSQL | Version 13 or newer, reachable over TCP from the PC running the app. A local install from https://www.postgresql.org/download/windows/ works fine. |
+| macOS      | macOS 11 Big Sur or later, Apple Silicon or Intel. The window is provided by an installed Chromium browser (Chrome, Edge, Brave, Vivaldi or Chromium) running in app mode; with none of those installed the app opens in your default browser instead. |
+| PostgreSQL | Version 13 or newer, reachable over TCP from the machine running the app. A local install works fine - https://www.postgresql.org/download/ (on a Mac, `brew install postgresql@16 && brew services start postgresql@16`). |
 
 ## Running the application
+
+### Windows
 
 1. Download `PowerDistributionSystem.exe` (from the GitHub **Actions** artifacts of
    any build, or from a **Release**) and place it anywhere, e.g. `C:\PDS\`.
@@ -62,10 +67,43 @@ Settings are saved to `%APPDATA%\PowerDistribution\config.json`. To run in
 portable mode, put a `config.json` next to the exe instead. A log file is
 written beside the config file.
 
+### macOS
+
+1. Download `PowerDistributionSystem-macos.zip`, unzip it, and drag
+   **PowerDistributionSystem.app** into your **Applications** folder.
+2. macOS blocks apps that are not signed by a paid Apple developer account, so
+   clear that flag once, in Terminal:
+
+   ```sh
+   xattr -cr /Applications/PowerDistributionSystem.app
+   ```
+
+   Without this step the first launch reports that the app "is damaged" or is
+   "from an unidentified developer". The alternative, if you would rather not
+   use Terminal, is to double-click the app, then open **System Settings →
+   Privacy & Security**, scroll to the message about the blocked app and click
+   **Open Anyway**.
+3. Double-click the app. The first time it opens a **Connect to PostgreSQL**
+   screen; fill it in exactly as described for Windows above.
+4. Choose your role in the top-right corner and start working.
+
+The app has no Dock icon of its own, because the window it opens belongs to the
+browser hosting the interface. **Closing that window quits the application.**
+
+Settings are saved to `~/Library/Application Support/PowerDistribution/config.json`,
+with the log file beside it. To see the log:
+
+```sh
+tail -f ~/Library/Application\ Support/PowerDistribution/power-distribution.log
+```
+
 ### Command-line options
 
 ```
 PowerDistributionSystem.exe [--browser] [--port 8080] [--config path\to\config.json] [--headless]
+
+# macOS - the executable inside the bundle
+/Applications/PowerDistributionSystem.app/Contents/MacOS/PowerDistributionSystem --browser
 ```
 
 | Flag | Meaning |
@@ -89,11 +127,20 @@ powershell -ExecutionPolicy Bypass -File build\build-windows.ps1 -Version 1.0.0
 ```
 
 ```sh
-# On Linux / macOS (cross-compile)
+# macOS app bundle (both Apple Silicon and Intel), from macOS or Linux
+build/build-macos.sh 1.0.0
+# or
+make macos
+
+# Windows exe, cross-compiled from Linux or macOS
 build/build-windows.sh 1.0.0
 # or
 make windows
 ```
+
+Building on your own Mac is the smoothest route: locally built apps are not
+quarantined by Gatekeeper, so the `xattr` step above is not needed. Install Go
+with `brew install go` first.
 
 The output is `dist\PowerDistributionSystem.exe` (about 10 MB). Run the tests with
 `make test`. To try the app on Linux/macOS during development use
@@ -113,7 +160,7 @@ internal/db/             pgx connection pool, migrations (embedded SQL), seed da
 internal/model/          domain types and load/utilisation calculations (+ tests)
 internal/window/         native window (WebView2 on Windows, browser elsewhere)
 web/                     embedded single page UI (index.html, app.js, styles.css)
-build/                   build scripts and Windows icon/version resources
+build/                   build scripts, Windows icon/version resources, macOS bundle files
 ```
 
 ## Data model

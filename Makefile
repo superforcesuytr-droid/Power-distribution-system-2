@@ -1,7 +1,7 @@
 VERSION ?= 1.0.0
 LDFLAGS  = -s -w -X main.version=$(VERSION)
 
-.PHONY: run test windows linux winres clean
+.PHONY: run test windows macos linux winres clean
 
 run:            ## Run locally in browser mode (set DATABASE_URL or use the setup screen)
 	go run ./cmd/pds --browser
@@ -12,6 +12,9 @@ test:
 windows:        ## Cross-compile the Windows executable into dist/
 	mkdir -p dist
 	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS) -H windowsgui" -o dist/PowerDistributionSystem.exe ./cmd/pds
+
+macos:          ## Build the macOS .app bundle (Apple Silicon + Intel) into dist/
+	build/build-macos.sh $(VERSION)
 
 linux:
 	mkdir -p dist
