@@ -51,3 +51,31 @@ func TestCompute(t *testing.T) {
 		t.Errorf("MCB-01 wrong: %+v", m)
 	}
 }
+
+func TestNaturalLess(t *testing.T) {
+	sorted := []string{"FAC1", "FAC 2", "FAC3", "FAC5", "FAC9", "FAC10", "FAC11", "FAC100"}
+	for i := 0; i < len(sorted)-1; i++ {
+		if !NaturalLess(sorted[i], sorted[i+1]) {
+			t.Errorf("%q should sort before %q", sorted[i], sorted[i+1])
+		}
+		if NaturalLess(sorted[i+1], sorted[i]) {
+			t.Errorf("%q should not sort before %q", sorted[i+1], sorted[i])
+		}
+	}
+	if !NaturalLess("MCB-9", "MCB-10") {
+		t.Error("MCB-9 should sort before MCB-10")
+	}
+	if !NaturalLess("MCCB-A", "MCCB-B") {
+		t.Error("MCCB-A should sort before MCCB-B")
+	}
+	if !NaturalLess("fac1", "FAC2") {
+		t.Error("comparison should ignore case")
+	}
+	if NaturalLess("FAC1", "FAC1") {
+		t.Error("equal codes are not less than each other")
+	}
+	// Leading zeros must not change the value.
+	if NaturalLess("MCB-010", "MCB-9") {
+		t.Error("MCB-010 is ten, so it sorts after MCB-9")
+	}
+}

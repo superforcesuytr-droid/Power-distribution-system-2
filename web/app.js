@@ -14,6 +14,7 @@
     collapsed: new Set(JSON.parse(localStorage.getItem('pds.collapsed') || '[]')),
     route: { view: 'dashboard', params: {} },
     explorer: { building_id: '', board_id: '', status: '', q: '' },
+    boardFilter: { q: '', level: '' },
     focus: null,
   };
 
@@ -210,23 +211,57 @@
     applyFocus();
   }
 
+  // Narrows the sidebar to the boards worth looking at: by text across the
+  // board's code, level, location, technician and building, and by how heavily
+  // loaded it is.
+  function sidebarMatches() {
+    const ov = state.overview, f = state.boardFilter;
+    const q = f.q.trim().toLowerCase();
+    const active = q !== '' || f.level !== '';
+    const levelOK = bo => {
+      if (f.level === 'warning') return bo.util_level !== 'normal';
+      if (f.level === 'critical') return bo.util_level === 'critical';
+      return true;
+    };
+    const textOK = bo => !q || [bo.code, bo.level, bo.location, bo.technician, bo.building_name]
+      .some(v => String(v || '').toLowerCase().includes(q));
+    const boards = ov.boards.filter(bo => levelOK(bo) && textOK(bo));
+    const buildings = active
+      ? ov.buildings.filter(b => boards.some(bo => bo.building_id === b.id))
+      : ov.buildings;
+    return { active, boards, buildings };
+  }
+
   function renderSidebar() {
     const ov = state.overview;
     const t = ov.totals;
+    const f = state.boardFilter;
+    const m = sidebarMatches();
     const curBuilding = state.board ? state.board.building_id : 0;
     $('#sidebar').innerHTML = `
       <div class="side-head">
         <span class="side-title">BUILDINGS</span>
         ${canManage() ? '<button class="btn-plus" data-action="add-building" title="Add building">+</button>' : ''}
       </div>
-      <div class="stat-tiles">
+      <div class="side-filter">
+        <input id="board-filter" type="search" placeholder="Filter boards…" value="${esc(f.q)}" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="level-chips">
+        <button data-action="filter-level" data-level="" class="${f.level === '' ? 'on' : ''}">All</button>
+        <button data-action="filter-level" data-level="warning" class="${f.level === 'warning' ? 'on' : ''}">Warning +</button>
+        <button data-action="filter-level" data-level="critical" class="${f.level === 'critical' ? 'on' : ''}">Critical</button>
+      </div>
+      ${m.active
+        ? `<div class="filter-count">${plural(m.boards.length, 'board')} of ${t.boards} · <a data-action="filter-clear">clear</a></div>`
+        : `<div class="stat-tiles">
         <div class="stat-tile"><div class="n">${t.buildings}</div><div class="l">Buildings</div></div>
         <div class="stat-tile"><div class="n">${t.boards}</div><div class="l">Boards</div></div>
         <div class="stat-tile"><div class="n">${t.circuits}</div><div class="l">Circuits</div></div>
-      </div>
-      ${ov.buildings.map(b => {
-        const boards = ov.boards.filter(x => x.building_id === b.id);
-        const open = b.id === curBuilding;
+      </div>`}
+      ${m.buildings.map(b => {
+        const boards = m.boards.filter(x => x.building_id === b.id);
+        // While filtering, every listed building is opened so the matches show.
+        const open = m.active || b.id === curBuilding;
         return `
         <div class="building-card ${open ? 'active' : ''}" data-action="open-building" data-id="${b.id}">
           <div class="name"><span class="ico">${esc(b.icon)}</span>${esc(b.name)}</div>
@@ -250,7 +285,19 @@
           </div>
         </div>`;
       }).join('')}
-      ${!ov.buildings.length ? '<div class="side-empty">No buildings yet. Use + to add one.</div>' : ''}`;
+      ${!ov.buildings.length ? '<div class="side-empty">No buildings yet. Use + to add one.</div>' : ''}
+      ${ov.buildings.length && !m.buildings.length ? '<div class="filter-none">No boards match this filter.</div>' : ''}`;
+
+    const input = $('#board-filter');
+    if (input) {
+      input.addEventListener('input', () => {
+        state.boardFilter.q = input.value;
+        const pos = input.selectionStart;
+        renderSidebar();
+        const again = $('#board-filter');
+        if (again) { again.focus(); again.setSelectionRange(pos, pos); }
+      });
+    }
   }
 
   function renderBoard() {
@@ -1017,6 +1064,8 @@
         break;
       }
       case 'open-board': navigate(boardHash('dashboard', id)); break;
+      case 'filter-level': state.boardFilter.level = el.dataset.level; renderSidebar(); break;
+      case 'filter-clear': state.boardFilter = { q: '', level: '' }; renderSidebar(); break;
       case 'open-node': navigate(boardHash('dashboard', state.boardId, 'focus=' + el.dataset.focus)); break;
       case 'sld-board': navigate(boardHash('sld', id)); break;
       case 'toggle-mccb': {

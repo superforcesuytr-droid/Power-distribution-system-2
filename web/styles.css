@@ -143,6 +143,23 @@ input, select, textarea { font: inherit; color: inherit; }
 .stat-tile { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px 6px; text-align: center; }
 .stat-tile .n { font-family: var(--mono); font-weight: 700; font-size: 17px; color: var(--primary); }
 .stat-tile .l { font-size: 11px; color: var(--muted); margin-top: 1px; }
+.side-filter { margin-bottom: 8px; }
+.side-filter input {
+  width: 100%; height: 32px; padding: 0 10px; font-size: 13px;
+  border: 1px solid var(--border); border-radius: 8px; background: #fff;
+}
+.side-filter input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft); }
+.level-chips { display: flex; gap: 6px; margin-bottom: 12px; }
+.level-chips button {
+  flex: 1; font-size: 11px; font-weight: 600; padding: 5px 4px;
+  border: 1px solid var(--border); border-radius: 7px; background: #fff; color: var(--muted);
+}
+.level-chips button:hover { border-color: var(--border-strong); color: var(--text); }
+.level-chips button.on { background: var(--primary); border-color: var(--primary); color: #fff; }
+.filter-count { font-size: 11px; color: var(--muted); margin-bottom: 10px; }
+.filter-count a { cursor: pointer; }
+.filter-none { padding: 22px 10px; text-align: center; color: var(--muted); font-size: 13px; }
+
 .building-card {
   background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
   padding: 12px 14px; margin-bottom: 12px; cursor: pointer; transition: border-color .12s;

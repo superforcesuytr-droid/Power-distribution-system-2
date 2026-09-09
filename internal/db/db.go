@@ -545,6 +545,34 @@ func (s *Store) loadTrees(ctx context.Context, boardID int64) ([]model.BoardDeta
 		return nil, err
 	}
 
+	// Order everything the way an engineer reads a schedule - FAC1, FAC2, FAC10 -
+	// rather than by when each row happened to be created, so a board added
+	// today takes its place in the sequence instead of landing at the bottom.
+	sort.SliceStable(boards, func(i, j int) bool {
+		if boards[i].BuildingID != boards[j].BuildingID {
+			return boards[i].BuildingID < boards[j].BuildingID
+		}
+		return model.NaturalLess(boards[i].Code, boards[j].Code)
+	})
+	for i := range boards {
+		bd := &boards[i]
+		sort.SliceStable(bd.MCCBs, func(a, b int) bool {
+			return model.NaturalLess(bd.MCCBs[a].Name, bd.MCCBs[b].Name)
+		})
+		for j := range bd.MCCBs {
+			m := &bd.MCCBs[j]
+			sort.SliceStable(m.MCBs, func(a, b int) bool {
+				return model.NaturalLess(m.MCBs[a].Name, m.MCBs[b].Name)
+			})
+			for k := range m.MCBs {
+				mb := &m.MCBs[k]
+				sort.SliceStable(mb.Circuits, func(a, b int) bool {
+					return model.NaturalLess(mb.Circuits[a].Code, mb.Circuits[b].Code)
+				})
+			}
+		}
+	}
+
 	st := s.Settings()
 	for i := range boards {
 		boards[i].Compute(st)
@@ -645,7 +673,22 @@ func (s *Store) ListCircuits(ctx context.Context, f CircuitFilter) ([]model.Circ
 		r.Level = st.Level(r.Pct)
 		out = append(out, r)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].BoardCode != out[j].BoardCode {
+			return model.NaturalLess(out[i].BoardCode, out[j].BoardCode)
+		}
+		if out[i].MCCBName != out[j].MCCBName {
+			return model.NaturalLess(out[i].MCCBName, out[j].MCCBName)
+		}
+		if out[i].MCBName != out[j].MCBName {
+			return model.NaturalLess(out[i].MCBName, out[j].MCBName)
+		}
+		return model.NaturalLess(out[i].Code, out[j].Code)
+	})
+	return out, nil
 }
 
 // Search finds boards, breakers and circuits whose names or codes match q.
