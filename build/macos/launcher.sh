@@ -9,10 +9,14 @@
 # application is not responding" on every later launch. Exiting immediately
 # means there is never such a process; the already-running copy is found by the
 # binary itself, which reopens its window and quits.
+#
+# The extra subshell orphans the binary to launchd rather than leaving it a
+# child of a process that is about to exit, so it keeps running after the
+# bundle has been marked as quit.
 DIR=$(cd "$(dirname "$0")" && pwd)
 case "$(uname -m)" in
   arm64) BIN="$DIR/pds-arm64" ;;
   *)     BIN="$DIR/pds-amd64" ;;
 esac
-nohup "$BIN" "$@" >/dev/null 2>&1 &
+( nohup "$BIN" "$@" >/dev/null 2>&1 & ) &
 exit 0

@@ -32,9 +32,27 @@ var version = "dev"
 
 const appTitle = "Power Distribution System"
 
+// preferredPort is tried before falling back to any free port. A stable
+// address matters because the browser profile that hosts the window remembers
+// the last one it was shown: with a fresh random port on every launch, the
+// restored window points at a port nothing is listening on any more and the
+// operator is met with "connection refused" instead of the application.
+const preferredPort = 17820
+
+// listen binds the requested port, or the preferred one, or any free port.
+func listen(port int) (net.Listener, error) {
+	if port > 0 {
+		return net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	}
+	if ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", preferredPort)); err == nil {
+		return ln, nil
+	}
+	return net.Listen("tcp", "127.0.0.1:0")
+}
+
 func main() {
 	var (
-		port       = flag.Int("port", 0, "TCP port to listen on (0 = pick a free port)")
+		port       = flag.Int("port", 0, "TCP port to listen on (0 = the standard port, else any free one)")
 		browser    = flag.Bool("browser", false, "open in the default browser instead of a native window")
 		headless   = flag.Bool("headless", false, "serve the API/UI without opening any window (for testing)")
 		configPath = flag.String("config", "", "path to config.json (default: next to the exe, else the user config dir)")
@@ -97,7 +115,7 @@ func main() {
 	}
 
 	srv := &api.Server{Store: store, Config: cfg, Static: static, Version: version, LogPath: logPath, Dev: *devDir != ""}
-	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", *port))
+	ln, err := listen(*port)
 	if err != nil {
 		log.Fatalf("cannot listen: %v", err)
 	}

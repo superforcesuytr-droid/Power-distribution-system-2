@@ -111,7 +111,7 @@ PowerDistributionSystem.exe [--browser] [--port 8080] [--config path\to\config.j
 | Flag | Meaning |
 |------|---------|
 | `--browser`  | open in the default web browser instead of the native window |
-| `--port N`   | listen on a fixed port (default: a free random port on 127.0.0.1) |
+| `--port N`   | listen on a fixed port (default: 17820 on 127.0.0.1, or any free port if that one is taken) |
 | `--config`   | use a specific settings file |
 | `--headless` | serve the UI/API only, without opening a window (for testing) |
 | `--dev DIR`  | serve the UI from DIR on disk instead of the embedded copy, for development |
