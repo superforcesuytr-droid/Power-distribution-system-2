@@ -15,6 +15,10 @@ func (s *Server) routesHV(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/hv", s.handleHVGet)
 	mux.HandleFunc("PUT /api/hv", s.requireRole(model.RoleSupervisor, s.handleHVUpdate))
 
+	mux.HandleFunc("POST /api/hv/sections", s.requireRole(model.RoleSupervisor, s.handleHVSectionCreate))
+	mux.HandleFunc("PUT /api/hv/sections/{id}", s.requireRole(model.RoleSupervisor, s.handleHVSectionUpdate))
+	mux.HandleFunc("DELETE /api/hv/sections/{id}", s.requireRole(model.RoleSupervisor, s.handleHVSectionDelete))
+
 	mux.HandleFunc("POST /api/hv/feeders", s.requireRole(model.RoleSupervisor, s.handleHVFeederCreate))
 	mux.HandleFunc("PUT /api/hv/feeders/{id}", s.requireRole(model.RoleSupervisor, s.handleHVFeederUpdate))
 	mux.HandleFunc("DELETE /api/hv/feeders/{id}", s.requireRole(model.RoleSupervisor, s.handleHVFeederDelete))
@@ -80,6 +84,7 @@ func (s *Server) handleHVUpdate(w http.ResponseWriter, r *http.Request) {
 type hvFeederInput struct {
 	Name       string   `json:"name"`
 	Switchgear string   `json:"switchgear"`
+	SectionID  int64    `json:"section_id"`
 	Voltage    string   `json:"voltage"`
 	Source     string   `json:"source"`
 	RatingA    *float64 `json:"rating_a"`
@@ -87,7 +92,7 @@ type hvFeederInput struct {
 
 func (in hvFeederInput) toModel(id, networkID int64, defVoltage string) (model.HVFeeder, error) {
 	f := model.HVFeeder{
-		ID: id, NetworkID: networkID,
+		ID: id, NetworkID: networkID, SectionID: in.SectionID,
 		Name:       strings.ToUpper(strings.TrimSpace(in.Name)),
 		Switchgear: strings.ToUpper(strings.TrimSpace(in.Switchgear)),
 		Voltage:    strings.TrimSpace(in.Voltage),
@@ -193,9 +198,9 @@ func (s *Server) handleHVFeederMove(w http.ResponseWriter, r *http.Request) {
 // Ways --------------------------------------------------------------------
 
 type hvWayInput struct {
-	FeederID int64    `json:"feeder_id"`
-	Name     string   `json:"name"`
-	RatingA  *float64 `json:"rating_a"`
+	SectionID int64    `json:"section_id"`
+	Name      string   `json:"name"`
+	RatingA   *float64 `json:"rating_a"`
 
 	DestBoardID *int64 `json:"dest_board_id"`
 	DestLabel   string `json:"dest_label"`
@@ -205,7 +210,7 @@ type hvWayInput struct {
 
 func (in hvWayInput) toModel(id int64) (model.HVWay, error) {
 	w := model.HVWay{
-		ID: id, FeederID: in.FeederID,
+		ID: id, SectionID: in.SectionID,
 		Name:        strings.TrimSpace(in.Name),
 		RatingA:     in.RatingA,
 		DestBoardID: in.DestBoardID,
@@ -241,11 +246,12 @@ func (s *Server) handleHVWayCreate(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	if way.FeederID <= 0 {
-		fail(w, &db.UserError{Msg: "Feeder is required."})
+	n, err := s.Store.HVNetwork(ctx(r))
+	if err != nil {
+		fail(w, err)
 		return
 	}
-	id, err := s.Store.CreateHVWay(ctx(r), roleOf(r), way)
+	id, err := s.Store.CreateHVWay(ctx(r), roleOf(r), way, n.ID)
 	if err != nil {
 		fail(w, err)
 		return
@@ -298,16 +304,15 @@ type hvCouplerInput struct {
 	RatingA *float64 `json:"rating_a"`
 }
 
-// couplerModel places a coupler in the gap that follows a feeder. Every feeder
-// sits on one busbar, so where the coupler goes is a single choice; the section
-// on its right is whichever feeder comes next, and is resolved here rather than
-// asked for, which keeps the two from ever disagreeing.
+// couplerModel places a coupler in the gap that follows a bus section. Sections
+// sit in one row, so where the coupler goes is a single choice; the section on
+// its right is whichever comes next, and is resolved here rather than asked
+// for, which keeps the two from ever disagreeing.
 func (s *Server) couplerModel(r *http.Request, in hvCouplerInput, id int64) (model.HVCoupler, error) {
 	c := model.HVCoupler{
-		ID:      id,
-		Name:    strings.ToUpper(strings.TrimSpace(in.Name)),
-		Closed:  in.Closed,
-		RatingA: in.RatingA,
+		ID:     id,
+		Name:   strings.ToUpper(strings.TrimSpace(in.Name)),
+		Closed: in.Closed, RatingA: in.RatingA,
 	}
 	if err := required("Coupler name", c.Name); err != nil {
 		return c, err
@@ -320,18 +325,18 @@ func (s *Server) couplerModel(r *http.Request, in hvCouplerInput, id int64) (mod
 	if in.AfterID <= 0 {
 		return c, &db.UserError{Msg: "Choose where on the busbar the coupler sits."}
 	}
-	for i, f := range n.Feeders {
-		if f.ID != in.AfterID {
+	for i, sec := range n.Sections {
+		if sec.ID != in.AfterID {
 			continue
 		}
-		if i+1 >= len(n.Feeders) {
-			return c, &db.UserError{Msg: "There is no feeder after " + f.Name + ", so a coupler cannot sit there."}
+		if i+1 >= len(n.Sections) {
+			return c, &db.UserError{Msg: "There is no section after " + sec.Name + ", so a coupler cannot sit there."}
 		}
-		c.LeftID = f.ID
-		c.RightID = n.Feeders[i+1].ID
+		c.LeftSectionID = sec.ID
+		c.RightSectionID = n.Sections[i+1].ID
 		return c, nil
 	}
-	return c, &db.UserError{Msg: "That feeder is no longer on the busbar."}
+	return c, &db.UserError{Msg: "That section is no longer on the busbar."}
 }
 
 func (s *Server) handleHVCouplerCreate(w http.ResponseWriter, r *http.Request) {
@@ -524,6 +529,72 @@ func (s *Server) handleHVDevicePlace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Store.PlaceHVDevice(ctx(r), roleOf(r), id, db.DevTarget(in.WayID, in.FeederID), in.AfterID); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+// Sections -----------------------------------------------------------------
+
+type hvSectionInput struct {
+	Name string `json:"name"`
+}
+
+func (s *Server) handleHVSectionCreate(w http.ResponseWriter, r *http.Request) {
+	var in hvSectionInput
+	if err := decode(r, &in); err != nil {
+		fail(w, err)
+		return
+	}
+	name := strings.TrimSpace(in.Name)
+	if err := required("Section name", name); err != nil {
+		fail(w, err)
+		return
+	}
+	n, err := s.Store.HVNetwork(ctx(r))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	id, err := s.Store.CreateHVSection(ctx(r), roleOf(r), n.ID, name)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 201, map[string]int64{"id": id})
+}
+
+func (s *Server) handleHVSectionUpdate(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	var in hvSectionInput
+	if err := decode(r, &in); err != nil {
+		fail(w, err)
+		return
+	}
+	name := strings.TrimSpace(in.Name)
+	if err := required("Section name", name); err != nil {
+		fail(w, err)
+		return
+	}
+	if err := s.Store.UpdateHVSection(ctx(r), roleOf(r), id, name); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+func (s *Server) handleHVSectionDelete(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if err := s.Store.DeleteHVSection(ctx(r), roleOf(r), id); err != nil {
 		fail(w, err)
 		return
 	}

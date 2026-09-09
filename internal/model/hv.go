@@ -2,8 +2,8 @@ package model
 
 import "time"
 
-// Device kinds that can sit on an outgoing way, in the order a drawing would
-// show them (mirrors the hv_device_kind enum in PostgreSQL).
+// Device kinds that can sit on a conductor, in the order a drawing would show
+// them (mirrors the hv_device_kind enum in PostgreSQL).
 const (
 	DeviceSwitchgear  = "switchgear"
 	DeviceIsolator    = "isolator"
@@ -27,7 +27,8 @@ var DeviceKinds = []struct{ Kind, Label string }{
 	{DeviceMeter, "Meter"},
 }
 
-// ValidDeviceKind reports whether k is a kind of device that can sit on a way.
+// ValidDeviceKind reports whether k is a kind of device that can sit on a
+// conductor.
 func ValidDeviceKind(k string) bool {
 	for _, d := range DeviceKinds {
 		if d.Kind == k {
@@ -43,7 +44,7 @@ func IsProtection(k string) bool {
 	return k == DeviceRCCB || k == DeviceELR || k == DeviceELCB
 }
 
-// HVDevice is one item on a way, drawn in position order down the conductor.
+// HVDevice is one item on a conductor, drawn in position order down it.
 type HVDevice struct {
 	ID int64 `json:"id"`
 	// Exactly one of WayID and FeederID is set: a device sits on an outgoing
@@ -59,16 +60,17 @@ type HVDevice struct {
 	Position int      `json:"position"`
 }
 
-// HVNetwork is the site-wide high-voltage distribution overview: the incoming
-// feeders, the switchgear they land on, and the couplers tying them together.
+// HVNetwork is the site-wide high-voltage distribution overview: the busbar
+// sections, what backs each one, and the couplers between them.
 type HVNetwork struct {
 	ID       int64       `json:"id"`
 	Name     string      `json:"name"`
 	Voltage  string      `json:"voltage"`
-	Feeders  []HVFeeder  `json:"feeders"`
+	Sections []HVSection `json:"sections"`
 	Couplers []HVCoupler `json:"couplers"`
 
 	// Derived
+	SectionCount     int `json:"section_count"`
 	FeederCount      int `json:"feeder_count"`
 	WayCount         int `json:"way_count"`
 	TransformerCount int `json:"transformer_count"`
@@ -76,10 +78,35 @@ type HVNetwork struct {
 	LinkedCount      int `json:"linked_count"`
 }
 
-// HVFeeder is one incoming supply and the switchgear bus it feeds.
+// HVSection is one length of busbar: the incomers that back it and the ways
+// that tap it. A coupler is what divides one section from the next, which is
+// why a way belongs to a section rather than to any one feeder.
+type HVSection struct {
+	ID        int64      `json:"id"`
+	NetworkID int64      `json:"network_id"`
+	Name      string     `json:"name"`
+	Position  int        `json:"position"`
+	Feeders   []HVFeeder `json:"feeders"`
+	Ways      []HVWay    `json:"ways"`
+}
+
+// Backing names the feeders that hold a section up, for labels and tooltips.
+func (s HVSection) Backing() string {
+	out := ""
+	for i, f := range s.Feeders {
+		if i > 0 {
+			out += ", "
+		}
+		out += f.Name
+	}
+	return out
+}
+
+// HVFeeder is one incoming supply landing on a bus section.
 type HVFeeder struct {
 	ID        int64  `json:"id"`
 	NetworkID int64  `json:"network_id"`
+	SectionID int64  `json:"section_id"`
 	Name      string `json:"name"`
 	// Switchgear is the designation written beside the breaker symbol, such as
 	// 22SGI1, as distinct from the feeder's own name.
@@ -89,18 +116,17 @@ type HVFeeder struct {
 	RatingA    *float64   `json:"rating_a"`
 	Position   int        `json:"position"`
 	Devices    []HVDevice `json:"devices"`
-	Ways       []HVWay    `json:"ways"`
 	CreatedAt  time.Time  `json:"created_at"`
 	UpdatedAt  time.Time  `json:"updated_at"`
 }
 
-// HVWay is an outgoing way from a feeder's switchgear: optionally protected,
-// optionally through a transformer, landing on a board or a named destination.
+// HVWay is an outgoing way tapping a bus section: whatever is fitted on it,
+// landing on a board or a named destination.
 type HVWay struct {
-	ID       int64    `json:"id"`
-	FeederID int64    `json:"feeder_id"`
-	Name     string   `json:"name"`
-	RatingA  *float64 `json:"rating_a"`
+	ID        int64    `json:"id"`
+	SectionID int64    `json:"section_id"`
+	Name      string   `json:"name"`
+	RatingA   *float64 `json:"rating_a"`
 
 	// Devices are everything fitted on this way, in the order they appear down
 	// the conductor.
@@ -135,30 +161,35 @@ func (w HVWay) Destination() string {
 	return "Not assigned"
 }
 
-// HVCoupler ties two feeders' busbars together.
+// HVCoupler ties two bus sections together.
 type HVCoupler struct {
-	ID        int64     `json:"id"`
-	NetworkID int64     `json:"network_id"`
-	Name      string    `json:"name"`
-	LeftID    int64     `json:"left_id"`
-	RightID   int64     `json:"right_id"`
-	Closed    bool      `json:"closed"`
-	RatingA   *float64  `json:"rating_a"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID             int64     `json:"id"`
+	NetworkID      int64     `json:"network_id"`
+	Name           string    `json:"name"`
+	LeftSectionID  int64     `json:"left_section_id"`
+	RightSectionID int64     `json:"right_section_id"`
+	Closed         bool      `json:"closed"`
+	RatingA        *float64  `json:"rating_a"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // Compute fills in the roll-up counts shown above the diagram.
 func (n *HVNetwork) Compute() {
-	n.FeederCount = len(n.Feeders)
-	n.WayCount, n.TransformerCount, n.ProtectedCount, n.LinkedCount = 0, 0, 0, 0
-	for i := range n.Feeders {
-		for _, d := range n.Feeders[i].Devices {
-			if d.Kind == DeviceTransformer {
-				n.TransformerCount++
+	n.SectionCount = len(n.Sections)
+	n.FeederCount, n.WayCount = 0, 0
+	n.TransformerCount, n.ProtectedCount, n.LinkedCount = 0, 0, 0
+	for i := range n.Sections {
+		sec := &n.Sections[i]
+		n.FeederCount += len(sec.Feeders)
+		for _, f := range sec.Feeders {
+			for _, d := range f.Devices {
+				if d.Kind == DeviceTransformer {
+					n.TransformerCount++
+				}
 			}
 		}
-		for _, w := range n.Feeders[i].Ways {
+		for _, w := range sec.Ways {
 			n.WayCount++
 			protected := false
 			for _, d := range w.Devices {

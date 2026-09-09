@@ -21,9 +21,9 @@ The single line diagram is drawn from the same data and can be edited directly:
   capacity, active / under-maintenance circuits, utilisation), and the full
   MCCB → MCB → circuit tree with live load bars. Add, edit and delete at every
   level.
-- **HV Overview** - the site-wide 22 kV picture above the boards: incoming
-  feeders on one continuous busbar, bus couplers that split it into sections,
-  and the outgoing ways from each feeder's switchgear. A way carries whatever is
+- **HV Overview** - the site-wide 22 kV picture above the boards: the busbar in
+  sections, the incoming feeders backing each section, the outgoing ways tapping
+  it, and the couplers that tie one section to the next. A way carries whatever is
   fitted on it, in whatever order: further switchgear, isolators, RCCBs, ELRs,
   ELCBs, transformers, fuses and meters, each one added below any other, moved
   along the way or removed. Every way lands on a destination box that opens the
@@ -235,9 +235,10 @@ build/                   build scripts, Windows icon/version resources, macOS bu
 buildings ─< boards ─< mccbs ─< mcbs ─< circuits
                                           audit_log, app_settings
 
-hv_networks ─< hv_feeders ─< hv_ways ─< hv_devices  (what is fitted on a way)
+hv_networks ─< hv_sections ─< hv_feeders ─< hv_devices  (incomers backing it)
+                          ─< hv_ways ─< hv_devices  (ways tapping it)
                                      ─> boards      (the destination it feeds)
-            ─< hv_couplers ─> hv_feeders            (the two sections it ties)
+            ─< hv_couplers ─> hv_sections           (the two it ties)
 ```
 
 - Every breaker has a rated current; **capacity** = rating × capacity factor.
