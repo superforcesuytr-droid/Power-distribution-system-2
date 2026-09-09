@@ -1,4 +1,6 @@
-VERSION ?= 1.0.0
+# A local build identifies itself by commit, so "which build am I running?" is
+# answerable from the app's About tab. Releases override it: make windows VERSION=1.8.0
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS  = -s -w -X main.version=$(VERSION)
 
 .PHONY: run dev test windows macos linux winres clean
