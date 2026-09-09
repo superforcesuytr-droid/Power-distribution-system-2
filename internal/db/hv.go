@@ -413,6 +413,48 @@ func (s *Store) CreateHVSection(ctx context.Context, role string, networkID, swi
 	return id, err
 }
 
+// SplitHVBusAfter divides a switchboard's bus when a coupler is asked for at
+// the end of it. A coupler is what separates one section from the next, so
+// putting one there means the bus gains a section on its far side. It reports
+// whether it split anything: with a section already following, there is
+// nothing to do.
+func (s *Store) SplitHVBusAfter(ctx context.Context, role string, sectionID int64) (bool, error) {
+	split := false
+	err := s.withTx(ctx, func(tx pgx.Tx) error {
+		var networkID, boardID int64
+		var pos int
+		if err := tx.QueryRow(ctx, `SELECT network_id, switchboard_id, position FROM hv_sections WHERE id = $1`,
+			sectionID).Scan(&networkID, &boardID, &pos); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
+		}
+		var after int
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM hv_sections
+			WHERE switchboard_id = $1 AND (position, id) > ($2, $3)`, boardID, pos, sectionID).Scan(&after); err != nil {
+			return err
+		}
+		if after > 0 {
+			return nil
+		}
+		var on int
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM hv_sections WHERE switchboard_id = $1`, boardID).Scan(&on); err != nil {
+			return err
+		}
+		name := "Section " + string(rune('A'+min(on, 25)))
+		var id int64
+		if err := tx.QueryRow(ctx, `INSERT INTO hv_sections (network_id, switchboard_id, name, position)
+			VALUES ($1, $2, $3, (SELECT coalesce(max(position),-1)+1 FROM hv_sections WHERE network_id = $1))
+			RETURNING id`, networkID, boardID, name).Scan(&id); err != nil {
+			return err
+		}
+		split = true
+		return s.audit(ctx, tx, role, "create", "hv_section", id, "Split the bus and added "+name)
+	})
+	return split, err
+}
+
 func (s *Store) UpdateHVSection(ctx context.Context, role string, id int64, name string) error {
 	return s.withTx(ctx, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `UPDATE hv_sections SET name = $2, updated_at = now() WHERE id = $1`, id, name)

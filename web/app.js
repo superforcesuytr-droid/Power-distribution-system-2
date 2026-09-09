@@ -845,7 +845,7 @@
         <div class="hv-toolbar">
           ${canManage() ? '<button class="btn btn-primary" data-action="hv-add-board">+ Add switchboard</button>' : ''}
           ${canManage() ? '<button class="btn" data-action="hv-add-section">+ Add bus section</button>' : ''}
-          ${canManage() && net.section_count > 1 ? '<button class="btn" data-action="hv-add-coupler">+ Add coupler</button>' : ''}
+          ${canManage() && net.section_count ? '<button class="btn" data-action="hv-add-coupler">+ Add coupler</button>' : ''}
         </div>
         ${net.section_count && canEdit() ? `<div class="palette">
           <span class="palette-label">DRAG ON:</span>
@@ -1884,15 +1884,26 @@
     const isEdit = !!(c && c.id);
     // A coupler needs only a position: the gap after a section, on that
     // section's own switchboard. Naming both sides would be the same choice
-    // twice over, and could be set to disagree.
-    const gaps = hvBoards().flatMap(b => b.sections.slice(0, -1).map((x, i) => ({
-      value: x.id, label: `${b.name}: between ${x.name} and ${b.sections[i + 1].name}`,
-    })));
-    if (!gaps.length) { toast('Add a second bus section before adding a coupler.', 'error'); return; }
+    // twice over, and could be set to disagree. Asked for at the end of a bus
+    // it divides it, so a new switchboard can be given one straight away.
+    const many = hvBoards().length > 1;
+    const gaps = hvBoards().flatMap(b => {
+      const on = b.sections;
+      if (!on.length) return [];
+      const lead = many ? b.name + ': ' : '';
+      const out = on.slice(0, -1).map((x, i) => ({
+        value: x.id, label: `${lead}between ${x.name} and ${on[i + 1].name}`,
+      }));
+      if (!isEdit) {
+        out.push({ value: on[on.length - 1].id, label: `${lead}at the end of the bus - splits it into a new section` });
+      }
+      return out;
+    });
+    if (!gaps.length) { toast('Add a bus section before adding a coupler.', 'error'); return; }
     formModal(isEdit ? 'Edit coupler ' + c.name : 'Add bus coupler', `
       ${field('Coupler name', 'name', isEdit ? c.name : 'BC-' + (hvCouplers().length + 1), { required: true, attrs: 'style="text-transform:uppercase"' })}
       ${field('Rating (A)', 'rating_a', isEdit && c.rating_a != null ? c.rating_a : '', { type: 'number', attrs: 'min="0" max="100000" step="any"', hint: 'Optional' })}
-      ${field('Position on the busbar', 'after_id', isEdit ? c.left_section_id : gaps[0].value, { type: 'select', required: true, full: true, options: gaps, hint: 'Which two sections it ties together.' })}
+      ${field('Position on the busbar', 'after_id', isEdit ? c.left_section_id : gaps[0].value, { type: 'select', required: true, full: true, options: gaps, hint: 'Which two lengths of bus it ties together. At the end of a bus it divides it, and the new section appears on its far side.' })}
       <div class="field inline full"><input type="checkbox" name="closed" id="cp_closed" ${isEdit && c.closed ? 'checked' : ''}><label for="cp_closed">Coupler is closed (the sections either side are tied together)</label></div>`,
       async d => {
         const body = { name: d.name, after_id: Number(d.after_id), closed: d.closed === 'on',

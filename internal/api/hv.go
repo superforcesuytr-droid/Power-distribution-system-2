@@ -397,6 +397,15 @@ func (s *Server) handleHVCouplerCreate(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
+	// Asked for at the end of a bus, a coupler divides it: the section on its
+	// far side is created here so a new switchboard can be given a coupler
+	// without having to be split by hand first.
+	if in.AfterID > 0 {
+		if _, err := s.Store.SplitHVBusAfter(ctx(r), roleOf(r), in.AfterID); err != nil {
+			fail(w, err)
+			return
+		}
+	}
 	c, err := s.couplerModel(r, in, 0)
 	if err != nil {
 		fail(w, err)
