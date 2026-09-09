@@ -814,8 +814,11 @@
   // the outgoing ways that carry supply down to a board.
   const DEVICE_LABEL = {
     switchgear: 'Switchgear', isolator: 'Isolator', rccb: 'RCCB', elr: 'ELR',
-    elcb: 'ELCB', transformer: 'Transformer', fuse: 'Fuse', meter: 'Meter',
+    elcb: 'ELCB', transformer: 'Transformer', fuse: 'Fuse', meter: 'Meter', chiller: 'Chiller',
   };
+  // What can stand where a way taps the bus, drawn on the conductor itself.
+  const HEAD_KINDS = { switchgear: 'Switchgear', isolator: 'Switch' };
+  const isHead = d => !!d && (d.kind === 'switchgear' || d.kind === 'isolator');
 
   async function renderHV() {
     const [net, boards] = await Promise.all([api('GET', '/api/hv'), api('GET', '/api/boards')]);
@@ -1096,13 +1099,15 @@
     hvDrops = [];
     const C = { bus: '#0b74c4', line: '#334155', tx: '#7c3aed', prot: '#d97a06', dest: '#0f8a4f', muted: '#94a3b8', label: '#475569' };
     const WAY_W = 182, WAY_GAP = 16, FEEDER_W = 248, SECTION_GAP = 120, MARGIN = 44, BOARD_GAP = 104;
-    const DEV_GAP = 54, DEST_H = 58;
-    const devHeight = d => (d.kind === 'transformer' ? 68 : 50);
+    const DEV_GAP = 64, DEST_H = 58;
+    // Room enough that a symbol and its rotated designation never crowd the
+    // next one down the conductor.
+    const devHeight = d => (d.kind === 'transformer' ? 84 : (d.kind === 'chiller' ? 88 : 58));
     // How far a chain of devices reaches below the head switchgear, which is
     // drawn on the conductor itself rather than below it.
     const chainOf = list => {
       let h = 0;
-      (list || []).forEach((d, i) => { if (!(i === 0 && d.kind === 'switchgear')) h += devHeight(d); });
+      (list || []).forEach((d, i) => { if (!(i === 0 && isHead(d))) h += devHeight(d); });
       return h;
     };
 
@@ -1138,7 +1143,7 @@
       g.i = i;
       boardAt[g.board.id] = g;
       g.feederY = top + 22;
-      g.swY = g.feederY + 54;
+      g.swY = g.feederY + 78;
       g.busY = g.swY + 88 + g.feederChain;
       g.wayTapY = g.busY + 56;
       g.destY = g.wayTapY + DEV_GAP + g.wayChain + 46;
@@ -1248,7 +1253,7 @@
             esc(f.name) + ' - drag left or right to move this feeder along the busbar');
 
           const fHead = (f.devices || [])[0];
-          const fHeadIsSwitch = fHead && fHead.kind === 'switchgear';
+          const fHeadIsSwitch = isHead(fHead);
           if (fHeadIsSwitch) {
             out.push(hvDevice(cx, swY, fHead));
           } else {
@@ -1264,7 +1269,7 @@
           const fHeadId = fHeadIsSwitch ? fHead.id : 0;
           if (canEdit()) hvDrops.push({ x: cx - 46, y: fy - 34, w: 92, h: 30, feederId: f.id, afterId: fHeadId });
           (f.devices || []).forEach((dev, di) => {
-            if (di === 0 && dev.kind === 'switchgear') return;
+            if (di === 0 && isHead(dev)) return;
             out.push(hvDevice(cx, fy, dev));
             const h = devHeight(dev);
             if (canEdit()) hvDrops.push({ x: cx - 46, y: fy + h - 34, w: 92, h: 30, feederId: f.id, afterId: dev.id });
@@ -1304,15 +1309,29 @@
           // its own bus, otherwise it stops at the destination box.
           const down = way.dest_switchboard_id ? boardAt[way.dest_switchboard_id] : null;
           const feedsDown = !!(down && down.i > g.i);
-          const foot = feedsDown ? down.busY : destY;
+          // Where each device on the chain sits, worked out before anything is
+          // drawn so the conductor knows where to stop.
+          const head = way.devices[0];
+          const headIsSwitch = isHead(head);
+          const chain = [];
+          let cy = wayTapY + DEV_GAP;
+          way.devices.forEach((dev, di) => {
+            if (di === 0 && headIsSwitch) return;
+            chain.push({ dev, y: cy });
+            cy += devHeight(dev);
+          });
+          // A chiller is the load itself, so the conductor runs into it and
+          // there is nothing below to put in a destination box.
+          const tail = chain.length ? chain[chain.length - 1] : null;
+          const endsAtLoad = !feedsDown && !!tail && tail.dev.kind === 'chiller';
+          const foot = feedsDown ? down.busY : (endsAtLoad ? tail.y : destY);
+          const below = feedsDown || endsAtLoad;
           out.push(`<rect class="hv-col-plate${canEdit() ? ' hv-grab' : ''}"${wGrab} fill="${C.bus}" fill-opacity="0"
-            x="${wx - WAY_W / 2 + 6}" y="${busY + 8}" width="${WAY_W - 12}" height="${(feedsDown ? foot : destY + DEST_H) - busY}" rx="12"/>`);
+            x="${wx - WAY_W / 2 + 6}" y="${busY + 8}" width="${WAY_W - 12}" height="${(below ? foot + 30 : destY + DEST_H) - busY}" rx="12"/>`);
           const wHandle = hvHandle(wx, busY, C.bus, wGrab,
             esc(way.name) + ' - drag left or right to move this way along the bar');
           out.push(`<line x1="${wx}" y1="${busY}" x2="${wx}" y2="${foot}" stroke="${C.line}" stroke-width="2.5"/>`);
 
-          const head = way.devices[0];
-          const headIsSwitch = head && head.kind === 'switchgear';
           if (headIsSwitch) {
             out.push(hvDevice(wx, wayTapY, head));
           } else {
@@ -1320,23 +1339,23 @@
             out.push(hvTag(wx - 15, wayTapY + 26, way.name, C.label, 12));
           }
 
-          let y = wayTapY + DEV_GAP;
           const headId = headIsSwitch ? head.id : 0;
-          if (canEdit()) hvDrops.push({ x: wx - 46, y: y - 34, w: 92, h: 30, wayId: way.id, afterId: headId });
-          way.devices.forEach((dev, di) => {
-            if (di === 0 && dev.kind === 'switchgear') return;
-            out.push(hvDevice(wx, y, dev));
-            const h = devHeight(dev);
-            if (canEdit()) hvDrops.push({ x: wx - 46, y: y + h - 34, w: 92, h: 30, wayId: way.id, afterId: dev.id });
-            y += h;
+          if (canEdit()) hvDrops.push({ x: wx - 46, y: wayTapY + DEV_GAP - 34, w: 92, h: 30, wayId: way.id, afterId: headId });
+          chain.forEach(({ dev, y: dy }) => {
+            out.push(hvDevice(wx, dy, dev));
+            if (canEdit()) hvDrops.push({ x: wx - 46, y: dy + devHeight(dev) - 34, w: 92, h: 30, wayId: way.id, afterId: dev.id });
           });
+          const y = cy;
           const lastId = way.devices.length ? way.devices[way.devices.length - 1].id : headId;
           if (canEdit()) {
-            hvDrops.push({ x: wx - 46, y: (feedsDown ? y + 14 : destY - 34), w: 92, h: 30, wayId: way.id, afterId: lastId });
-            out.push(sldPill(wx, feedsDown ? y + 29 : destY - 26, 34, '+', `data-action="hv-add-device" data-way="${way.id}"`, C.line, 'Fit another device on this way'));
+            hvDrops.push({ x: wx - 46, y: (below ? y + 14 : destY - 34), w: 92, h: 30, wayId: way.id, afterId: lastId });
+            out.push(sldPill(wx, below ? y + 29 : destY - 26, 34, '+', `data-action="hv-add-device" data-way="${way.id}"`, C.line, 'Fit another device on this way'));
           }
 
-          if (feedsDown) {
+          if (endsAtLoad) {
+            // Nothing to draw: the machine at the foot of the chain is where
+            // the way ends, and it carries its own name.
+          } else if (feedsDown) {
             // It lands on the switchboard below rather than in a box, the way
             // a drawing simply runs the line onto the next bus.
             out.push(`<g class="hv-node" id="hv-way-${way.id}" data-action="hv-edit-way" data-id="${way.id}"${wGrab}>
@@ -1363,7 +1382,7 @@
             </g>`);
           }
           if (canEdit()) {
-            const ey = feedsDown ? y + 12 : destY - 32;
+            const ey = below ? y + 12 : destY - 32;
             out.push(`<g class="sld-btn" data-action="hv-edit-way" data-id="${way.id}"><title>Edit ${esc(way.name)}</title>
               <rect x="${wx + WAY_W / 2 - 32}" y="${ey}" width="26" height="26" rx="7" fill="#fff" stroke="${C.line}" stroke-opacity=".35"/>
               <g transform="translate(${wx + WAY_W / 2 - 29} ${ey + 3})" fill="none" stroke="${C.line}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${SLD_ICONS.edit}</g></g>`);
@@ -1434,14 +1453,23 @@
         g.push(`<rect x="${cx - 17}" y="${cy - 26}" width="34" height="52" fill="#fff"/>
           <circle cx="${cx}" cy="${cy - 9}" r="16" fill="none" stroke="${col}" stroke-width="2.5"/>
           <circle cx="${cx}" cy="${cy + 9}" r="16" fill="none" stroke="${col}" stroke-width="2.5"/>`);
-        if (d.kva) g.push(`<text x="${cx + 24}" y="${cy - 2}" font-size="10" fill="${C.muted}">${fmtA(d.kva)} kVA</text>`);
-        if (d.ratio) g.push(`<text x="${cx + 24}" y="${cy + 11}" font-size="10" fill="${C.muted}">${esc(d.ratio)}</text>`);
+        if (d.kva) g.push(`<text x="${cx + 26}" y="${cy - 2}" font-size="10" fill="${C.muted}">${fmtA(d.kva)} kVA</text>`);
+        if (d.ratio) g.push(`<text x="${cx + 26}" y="${cy + 11}" font-size="10" fill="${C.muted}">${esc(d.ratio)}</text>`);
       } else if (kind === 'switchgear') {
         g.push(hvBreaker(cx, cy, col));
       } else if (kind === 'isolator') {
-        g.push(`<rect x="${cx - 12}" y="${cy - 16}" width="24" height="32" fill="#fff"/>
-          <circle cx="${cx}" cy="${cy + 12}" r="3" fill="${col}"/>
-          <line x1="${cx}" y1="${cy + 12}" x2="${cx + 13}" y2="${cy - 13}" stroke="${col}" stroke-width="2.5" stroke-linecap="round"/>`);
+        // The open switch as a drawing draws it: a contact at each end of the
+        // gap and the blade swung clear of the top one.
+        g.push(`<rect x="${cx - 14}" y="${cy - 18}" width="28" height="36" fill="#fff"/>
+          <line x1="${cx}" y1="${cy + 15}" x2="${cx + 15}" y2="${cy - 11}" stroke="${col}" stroke-width="2.5" stroke-linecap="round"/>
+          <circle cx="${cx}" cy="${cy + 15}" r="3.4" fill="#fff" stroke="${col}" stroke-width="2"/>
+          <circle cx="${cx}" cy="${cy - 15}" r="3.4" fill="#fff" stroke="${col}" stroke-width="2"/>`);
+      } else if (kind === 'chiller') {
+        // A machine on its stand, named inside the circle the way a drawing
+        // names it, since the way ends here rather than in a box.
+        g.push(`<path d="M ${cx - 22} ${cy + 26} L ${cx + 22} ${cy + 26} L ${cx} ${cy + 4} Z" fill="#fff" stroke="${col}" stroke-width="2.2" stroke-linejoin="round"/>
+          <circle cx="${cx}" cy="${cy}" r="18" fill="#fff" stroke="${col}" stroke-width="2.5"/>
+          <text x="${cx}" y="${cy + 5}" text-anchor="middle" font-size="${d.name && d.name.length > 4 ? 10 : 12}" font-weight="700" fill="${col}">${esc(d.name || 'M')}</text>`);
       } else if (kind === 'fuse') {
         g.push(`<rect x="${cx - 9}" y="${cy - 15}" width="18" height="30" rx="2" fill="#fff" stroke="${col}" stroke-width="2.5"/>`);
       } else if (kind === 'meter') {
@@ -1451,16 +1479,17 @@
         g.push(`<rect x="${cx - 34}" y="${cy - 15}" width="68" height="30" rx="7" fill="#fffaf0" stroke="${col}" stroke-width="2"/>
           <text x="${cx}" y="${cy + 5}" text-anchor="middle" font-size="12" font-weight="700" fill="${col}">${esc(label)}</text>`);
       }
-      if (d.name) g.push(hvTag(cx - 15, cy + 22, d.name, C.label, 11));
+      if (d.name && kind !== 'chiller') g.push(hvTag(cx - 15, cy + 22, d.name, C.label, 11));
       const title = `${label}${d.name ? ' ' + d.name : ''}${d.notes ? ' · ' + d.notes : ''}`;
       let inner = `<g class="${canEdit() ? 'hv-node' : ''}" ${canEdit() ? `data-action="hv-edit-device" data-id="${d.id}"` : ''}>
         <title>${esc(title)}${canEdit() ? ' - click to change or remove' : ''}</title>
         <rect x="${cx - 40}" y="${cy - 26}" width="80" height="52" fill="transparent"/>${g.join('')}</g>`;
       if (canEdit()) {
+        // Clear of the widest symbol and of a transformer's rating beside it.
         inner += `<g class="sld-btn" data-action="hv-add-device" data-way="${d.way_id || ''}" data-feeder="${d.feeder_id || ''}" data-after="${d.id}">
           <title>Fit another device below this one</title>
-          <rect x="${cx + 74}" y="${cy - 11}" width="22" height="22" rx="6" fill="#fff" stroke="${C.line}" stroke-opacity=".3"/>
-          <text x="${cx + 85}" y="${cy + 5}" text-anchor="middle" font-size="15" font-weight="700" fill="${C.line}">+</text></g>`;
+          <rect x="${cx + 100}" y="${cy - 11}" width="22" height="22" rx="6" fill="#fff" stroke="${C.line}" stroke-opacity=".3"/>
+          <text x="${cx + 111}" y="${cy + 5}" text-anchor="middle" font-size="15" font-weight="700" fill="${C.line}">+</text></g>`;
       }
       return inner;
     }
@@ -1778,6 +1807,11 @@
         hint: 'The section feeds this way, so every incomer on it backs the way.' })}
       ${field('Way name', 'name', isEdit ? way.name : hvNextWayName(parent), { required: true, placeholder: '22SG05' })}
       ${field('Rating (A)', 'rating_a', isEdit && way.rating_a != null ? way.rating_a : '', { type: 'number', attrs: 'min="0" max="100000" step="any"', hint: 'Optional' })}
+      ${isEdit ? '' : field('At the busbar', 'head_kind', 'switchgear', { type: 'select', required: true,
+        options: Object.entries(HEAD_KINDS).map(([value, label]) => ({ value, label })),
+        hint: 'Switchgear is the X; a switch is the open blade.' })}
+      ${isEdit ? '' : field('Runs into chiller', 'chiller', '', { placeholder: 'e.g. CH#1',
+        hint: 'Name one and the way runs from its switch straight into the machine, with no destination box.', attrs: 'style="text-transform:uppercase"' })}
       ${field('Feeds switchboard', 'dest_switchboard_id', isEdit && way.dest_switchboard_id ? way.dest_switchboard_id : '', { type: 'select', full: true,
         options: [{ value: '', label: '— does not feed a switchboard —' }].concat(below.map(b => ({ value: b.id, label: b.name + (b.voltage ? ' · ' + b.voltage : '') }))),
         hint: 'The way runs on down to that board\'s busbar, the way a transformer feeds the next voltage down.' })}
@@ -1795,6 +1829,7 @@
           dest_board_id: d.dest_board_id ? Number(d.dest_board_id) : null,
           dest_switchboard_id: d.dest_switchboard_id ? Number(d.dest_switchboard_id) : null,
           dest_label: d.dest_label || '', dest_detail: d.dest_detail || '', notes: d.notes || '',
+          head_kind: d.head_kind || 'switchgear', chiller: d.chiller || '',
         };
         if (isEdit) { state.focus = 'hv-way-' + way.id; await api('PUT', '/api/hv/ways/' + way.id, body); await afterChange('Way updated'); }
         else { const r = await api('POST', '/api/hv/ways', body); state.focus = 'hv-way-' + r.id; await afterChange('Way added'); }

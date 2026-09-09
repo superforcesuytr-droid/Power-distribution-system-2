@@ -16,6 +16,7 @@ const (
 	DeviceTransformer = "transformer"
 	DeviceFuse        = "fuse"
 	DeviceMeter       = "meter"
+	DeviceChiller     = "chiller"
 )
 
 // DeviceKinds lists every kind with the label a drawing gives it.
@@ -28,6 +29,13 @@ var DeviceKinds = []struct{ Kind, Label string }{
 	{DeviceTransformer, "Transformer"},
 	{DeviceFuse, "Fuse"},
 	{DeviceMeter, "Meter"},
+	{DeviceChiller, "Chiller"},
+}
+
+// IsHead reports whether a device kind can stand at the head of a way, drawn
+// on the conductor where it taps the bus: a switchgear X, or an open switch.
+func IsHead(k string) bool {
+	return k == DeviceSwitchgear || k == DeviceIsolator
 }
 
 // ValidDeviceKind reports whether k is a kind of device that can sit on a

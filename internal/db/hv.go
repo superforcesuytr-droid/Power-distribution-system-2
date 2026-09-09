@@ -689,7 +689,11 @@ func insertAt(run []int64, id int64, index int) []int64 {
 
 // Ways --------------------------------------------------------------------
 
-func (s *Store) CreateHVWay(ctx context.Context, role string, w model.HVWay, networkID int64) (int64, error) {
+// CreateHVWay adds a way to a bus section. HeadKind is what stands where it
+// taps the bus - a switchgear X or an open switch - and Chiller, when named,
+// puts the machine at the foot of it so the way runs from the switch straight
+// into the load.
+func (s *Store) CreateHVWay(ctx context.Context, role string, w model.HVWay, networkID int64, headKind, chiller string) (int64, error) {
 	var id int64
 	err := s.withTx(ctx, func(tx pgx.Tx) error {
 		section := w.SectionID
@@ -706,10 +710,20 @@ func (s *Store) CreateHVWay(ctx context.Context, role string, w model.HVWay, net
 			section, w.Name, w.RatingA, w.DestBoardID, w.DestSwitchboardID, w.DestLabel, w.DestDetail, w.Notes).Scan(&id); err != nil {
 			return err
 		}
-		// A way is drawn from its switchgear down, so a new one starts with one.
+		// A way is drawn from where it taps the bus down, so a new one starts
+		// with whatever stands at that tap.
+		if !model.IsHead(headKind) {
+			headKind = model.DeviceSwitchgear
+		}
 		if _, err := tx.Exec(ctx, `INSERT INTO hv_devices (way_id, kind, name, rating_a, position)
-			VALUES ($1, 'switchgear', $2, $3, 0)`, id, w.Name, w.RatingA); err != nil {
+			VALUES ($1, $2::hv_device_kind, $3, $4, 0)`, id, headKind, w.Name, w.RatingA); err != nil {
 			return err
+		}
+		if chiller != "" {
+			if _, err := tx.Exec(ctx, `INSERT INTO hv_devices (way_id, kind, name, position)
+				VALUES ($1, 'chiller', $2, 1)`, id, chiller); err != nil {
+				return err
+			}
 		}
 		return s.audit(ctx, tx, role, "create", "hv_way", id, "Added way "+w.Name+" feeding "+w.Destination())
 	})

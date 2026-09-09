@@ -247,6 +247,11 @@ type hvWayInput struct {
 	DestLabel         string `json:"dest_label"`
 	DestDetail        string `json:"dest_detail"`
 	Notes             string `json:"notes"`
+
+	// Only read when a way is created: what stands where it taps the bus, and
+	// the machine at the foot of it when the way runs straight into a load.
+	HeadKind string `json:"head_kind"`
+	Chiller  string `json:"chiller"`
 }
 
 func (in hvWayInput) toModel(id int64) (model.HVWay, error) {
@@ -298,7 +303,8 @@ func (s *Server) handleHVWayCreate(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	id, err := s.Store.CreateHVWay(ctx(r), roleOf(r), way, n.ID)
+	id, err := s.Store.CreateHVWay(ctx(r), roleOf(r), way, n.ID,
+		strings.TrimSpace(in.HeadKind), strings.ToUpper(strings.TrimSpace(in.Chiller)))
 	if err != nil {
 		fail(w, err)
 		return
