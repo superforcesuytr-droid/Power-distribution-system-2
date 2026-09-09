@@ -1565,9 +1565,16 @@
     confirmModal('Remove device', `Remove the <b>${esc(DEVICE_LABEL[dev.kind] || dev.kind)}</b>${dev.name ? ' <b>' + esc(dev.name) + '</b>' : ''} from this way? Everything below it stays where it is.`,
       async () => { await api('DELETE', '/api/hv/devices/' + dev.id); await afterChange('Device removed'); }, 'Remove');
   }
+  // A device sits on a way or on an incoming feeder, so both have to be
+  // searched or clicking one on a feeder finds nothing to edit or remove.
   function hvFindDevice(id) {
     for (const f of state.hv.feeders || []) {
-      for (const w of f.ways) { const d = (w.devices || []).find(x => x.id === id); if (d) return d; }
+      const own = (f.devices || []).find(x => x.id === id);
+      if (own) return own;
+      for (const w of f.ways) {
+        const d = (w.devices || []).find(x => x.id === id);
+        if (d) return d;
+      }
     }
     return null;
   }
