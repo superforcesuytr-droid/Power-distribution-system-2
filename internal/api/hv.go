@@ -28,6 +28,7 @@ func (s *Server) routesHV(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/hv/devices/{id}", s.requireRole(model.RoleTechnician, s.handleHVDeviceUpdate))
 	mux.HandleFunc("DELETE /api/hv/devices/{id}", s.requireRole(model.RoleTechnician, s.handleHVDeviceDelete))
 	mux.HandleFunc("POST /api/hv/devices/{id}/move", s.requireRole(model.RoleTechnician, s.handleHVDeviceMove))
+	mux.HandleFunc("POST /api/hv/devices/{id}/place", s.requireRole(model.RoleTechnician, s.handleHVDevicePlace))
 
 	mux.HandleFunc("POST /api/hv/couplers", s.requireRole(model.RoleSupervisor, s.handleHVCouplerCreate))
 	mux.HandleFunc("PUT /api/hv/couplers/{id}", s.requireRole(model.RoleSupervisor, s.handleHVCouplerUpdate))
@@ -498,6 +499,27 @@ func (s *Server) handleHVDeviceMove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Store.MoveHVDevice(ctx(r), roleOf(r), id, in.Delta); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+func (s *Server) handleHVDevicePlace(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	var in struct {
+		WayID   int64 `json:"way_id"`
+		AfterID int64 `json:"after_id"`
+	}
+	if err := decode(r, &in); err != nil {
+		fail(w, err)
+		return
+	}
+	if err := s.Store.PlaceHVDevice(ctx(r), roleOf(r), id, in.WayID, in.AfterID); err != nil {
 		fail(w, err)
 		return
 	}

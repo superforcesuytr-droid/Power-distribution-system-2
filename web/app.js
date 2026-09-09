@@ -813,14 +813,135 @@
           ${canManage() ? '<button class="btn btn-primary" data-action="hv-add-feeder">+ Add feeder</button>' : ''}
           ${canManage() && net.feeders.length > 1 ? '<button class="btn" data-action="hv-add-coupler">+ Add coupler</button>' : ''}
         </div>
+        ${net.feeders.length && canEdit() ? `<div class="palette">
+          <span class="palette-label">DRAG ON:</span>
+          ${Object.entries(DEVICE_LABEL).map(([k, l]) => `<span class="palette-chip" data-kind="${k}">${esc(l)}</span>`).join('')}
+          <span class="palette-hint">Drop one onto a way, or drag a device already on the diagram to move it.</span>
+        </div>` : ''}
         ${net.feeders.length ? zoomBar() : ''}
         <div class="sld-canvas" id="diagram-canvas">${net.feeders.length ? hvSVG(net) : '<div class="empty"><h2>No feeders yet</h2><p>Add the incoming feeders to start the overview.</p></div>'}</div>
       </div>`;
     mountZoom('hv');
+    hvMountDrag();
     applyFocus();
   }
 
+  // Dragging on the diagram. A drop lands the item at a place on a way and the
+  // conductor is redrawn through it, so the connection follows from where it
+  // was dropped rather than having to be drawn by hand.
+  let hvDragEndedAt = 0;
+
+  function hvMountDrag() {
+    const canvas = $('#diagram-canvas'), svg = canvas && $('svg', canvas);
+    if (!svg || !canEdit()) return;
+    const NS = 'http://www.w3.org/2000/svg';
+
+    const hint = document.createElementNS(NS, 'rect');
+    hint.setAttribute('class', 'drop-hint');
+    hint.setAttribute('rx', '8');
+    hint.style.display = 'none';
+    svg.appendChild(hint);
+
+    const toSvg = (cx, cy) => {
+      const m = svg.getScreenCTM();
+      if (!m) return null;
+      try { return new DOMPoint(cx, cy).matrixTransform(m.inverse()); } catch (_) { return null; }
+    };
+    const zoneAt = (cx, cy) => {
+      const p = toSvg(cx, cy);
+      if (!p) return null;
+      return hvDrops.find(z => p.x >= z.x && p.x <= z.x + z.w && p.y >= z.y && p.y <= z.y + z.h) || null;
+    };
+
+    let drag = null, press = null;
+
+    function begin(source, e) {
+      drag = { ...source, zone: null };
+      const ghost = document.createElement('div');
+      ghost.className = 'drag-ghost';
+      ghost.textContent = source.label;
+      document.body.appendChild(ghost);
+      drag.ghost = ghost;
+      canvas.classList.add('dropping');
+      move(e);
+    }
+    function move(e) {
+      if (!drag) return;
+      drag.ghost.style.left = e.clientX + 14 + 'px';
+      drag.ghost.style.top = e.clientY + 14 + 'px';
+      const z = zoneAt(e.clientX, e.clientY);
+      drag.zone = z;
+      if (z) {
+        hint.setAttribute('x', z.x); hint.setAttribute('y', z.y);
+        hint.setAttribute('width', z.w); hint.setAttribute('height', z.h);
+        hint.style.display = '';
+      } else {
+        hint.style.display = 'none';
+      }
+      drag.ghost.classList.toggle('over', !!z);
+    }
+    async function finish() {
+      const d = drag;
+      drag = null;
+      if (!d) return;
+      d.ghost.remove();
+      hint.style.display = 'none';
+      canvas.classList.remove('dropping');
+      hvDragEndedAt = Date.now();
+      if (!d.zone) return;
+      try {
+        if (d.mode === 'new') {
+          await api('POST', '/api/hv/devices', { way_id: d.zone.wayId, after_id: d.zone.afterId, kind: d.kind, name: '' });
+          await afterChange(d.label + ' fitted');
+        } else {
+          await api('POST', '/api/hv/devices/' + d.deviceId + '/place', { way_id: d.zone.wayId, after_id: d.zone.afterId });
+          await afterChange(d.label + ' moved');
+        }
+      } catch (err) { toast(err.message, 'error'); }
+    }
+
+    $$('.palette-chip').forEach(chip => chip.addEventListener('pointerdown', e => {
+      e.preventDefault();
+      chip.setPointerCapture(e.pointerId);
+      begin({ mode: 'new', kind: chip.dataset.kind, label: chip.textContent.trim() }, e);
+      const onMove = ev => move(ev);
+      const onUp = () => {
+        chip.removeEventListener('pointermove', onMove);
+        chip.removeEventListener('pointerup', onUp);
+        finish();
+      };
+      chip.addEventListener('pointermove', onMove);
+      chip.addEventListener('pointerup', onUp);
+    }));
+
+    // A device on the diagram: a small movement is a click to edit it, a larger
+    // one picks it up.
+    svg.addEventListener('pointerdown', e => {
+      if (e.target.closest('.sld-btn, .sld-pill')) return;
+      const g = e.target.closest('g.hv-node[data-action=hv-edit-device]');
+      if (!g || e.button !== 0) return;
+      // Deliberately no pointer capture yet: capturing here would retarget the
+      // click that follows, and a press on a device is a click until it moves.
+      press = { id: Number(g.dataset.id), x: e.clientX, y: e.clientY, pointerId: e.pointerId,
+        label: (g.querySelector('title') || {}).textContent || 'Device' };
+    });
+    svg.addEventListener('pointermove', e => {
+      if (drag) { move(e); return; }
+      if (press && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 6) {
+        begin({ mode: 'move', deviceId: press.id, label: press.label.split(' - ')[0] }, e);
+        try { svg.setPointerCapture(press.pointerId); } catch (_) { /* already gone */ }
+        press = null;
+      }
+    });
+    ['pointerup', 'pointercancel'].forEach(t => svg.addEventListener(t, () => { press = null; finish(); }));
+  }
+
+  // Where a dragged item may be dropped, in diagram coordinates, gathered while
+  // the drawing is built so the two can never disagree.
+  let hvDrops = [];
+
   function hvSVG(net) {
+    hvDrops = [];
     // `label` is for text that has to be read at a glance, `muted` for the
     // secondary figures beside a symbol.
     const C = { bus: '#0b74c4', line: '#334155', tx: '#7c3aed', prot: '#d97a06', dest: '#0f8a4f', muted: '#94a3b8', label: '#475569' };
@@ -871,6 +992,30 @@
     const busR = centers[centers.length - 1] + groups[groups.length - 1].width / 2;
     out.push(`<line x1="${busL}" y1="${busY}" x2="${busR}" y2="${busY}" stroke="${C.bus}" stroke-width="6" stroke-linecap="round"/>`);
 
+    // Name the sections the couplers divide the bar into, so it is plain which
+    // feeders back each other up and which side a coupler would tie in.
+    const cutAfter = new Set();
+    net.couplers.forEach(c => {
+      const l = byId[c.left_id], r = byId[c.right_id];
+      if (l && r) cutAfter.add(Math.min(l.i, r.i));
+    });
+    if (cutAfter.size) {
+      let from = 0;
+      const sections = [];
+      groups.forEach((g, i) => {
+        if (cutAfter.has(i) || i === groups.length - 1) {
+          sections.push({ from, to: i });
+          from = i + 1;
+        }
+      });
+      sections.forEach((sec, si) => {
+        const names = groups.slice(sec.from, sec.to + 1).map(g => g.f.name).join(', ');
+        const mid = (centers[sec.from] + centers[sec.to]) / 2;
+        out.push(`<text x="${mid}" y="${busY - 40}" text-anchor="middle" font-size="11" font-weight="700"
+          fill="${C.muted}" letter-spacing="1.4">SECTION ${String.fromCharCode(65 + si)} · ${esc(names)}</text>`);
+      });
+    }
+
     groups.forEach((g, gi) => {
       const f = g.f, cx = centers[gi];
       // The X is the switchgear, not a symbol wired to a box: its name sits
@@ -905,22 +1050,28 @@
         out.push(`<line x1="${wx}" y1="${busY}" x2="${wx}" y2="${destY}" stroke="${C.line}" stroke-width="2.5"/>`);
         const head = way.devices[0];
         const headIsSwitch = head && head.kind === 'switchgear';
-        out.push(hvBreaker(wx, wayTapY, C.line));
-        out.push(hvTag(wx - 15, wayTapY + 26, (headIsSwitch && head.name) || way.name, C.label, 12));
-        if (way.rating_a) out.push(`<text x="${wx + 18}" y="${wayTapY + 5}" font-size="11" fill="${C.muted}">${fmtA(way.rating_a)} A</text>`);
-        if (headIsSwitch && canEdit()) {
-          out.push(`<g class="sld-btn" data-action="hv-edit-device" data-id="${head.id}"><title>Edit ${esc(head.name || 'switchgear')}</title>
-            <rect x="${wx + 62}" y="${wayTapY - 12}" width="22" height="22" rx="6" fill="#fff" stroke="${C.line}" stroke-opacity=".3"/>
-            <g transform="translate(${wx + 63} ${wayTapY - 11})" fill="none" stroke="${C.line}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${SLD_ICONS.edit}</g></g>`);
+        if (headIsSwitch) {
+          out.push(hvDevice(wx, wayTapY, head));
+        } else {
+          out.push(hvBreaker(wx, wayTapY, C.line));
+          out.push(hvTag(wx - 15, wayTapY + 26, way.name, C.label, 12));
         }
 
-        // Everything fitted on the way, drawn in order down the conductor.
+        // Everything fitted on the way, drawn in order down the conductor, with
+        // a drop slot above the first and below every one.
         let y = wayTapY + DEV_GAP;
+        const headId = headIsSwitch ? head.id : 0;
+        hvDrops.push({ x: wx - 46, y: y - 34, w: 92, h: 30, wayId: way.id, afterId: headId });
         way.devices.forEach((dev, di) => {
           if (di === 0 && dev.kind === 'switchgear') return;   // already drawn at the tap
           out.push(hvDevice(wx, y, dev));
-          y += devHeight(dev);
+          const h = devHeight(dev);
+          hvDrops.push({ x: wx - 46, y: y + h - 34, w: 92, h: 30, wayId: way.id, afterId: dev.id });
+          y += h;
         });
+        // And a final slot just above the destination, for the end of the way.
+        hvDrops.push({ x: wx - 46, y: destY - 34, w: 92, h: 30, wayId: way.id,
+          afterId: way.devices.length ? way.devices[way.devices.length - 1].id : headId });
         if (canEdit()) {
           out.push(sldPill(wx, destY - 26, 34, '+', `data-action="hv-add-device" data-way="${way.id}"`, C.line, 'Fit another device on this way'));
         }
@@ -966,14 +1117,14 @@
       const col = c.closed ? C.bus : C.muted;
       const gap = c.closed ? 15 : 26;
       out.push(`<g class="hv-node" data-action="hv-edit-coupler" data-id="${c.id}">
-        <title>${esc(c.name)} - ${c.closed ? 'closed, the two bus sections are tied' : 'open, the bus is split here'}${canManage() ? '. Click to change.' : ''}</title>
+        <title>${esc(c.name)} - ${c.closed ? 'closed, so the sections either side are tied and one can back up the other' : 'open, so each section stands alone'}${canManage() ? '. Click to change.' : ''}</title>
         <rect x="${mid - gap}" y="${busY - 6}" width="${gap * 2}" height="12" fill="#f7fbfd"/>
         <g stroke="${col}" stroke-width="3" stroke-linecap="round">
           <line x1="${mid - 13}" y1="${busY - 13}" x2="${mid + 13}" y2="${busY + 13}"/>
           <line x1="${mid + 13}" y1="${busY - 13}" x2="${mid - 13}" y2="${busY + 13}"/>
         </g>
         <text x="${mid}" y="${busY - 24}" text-anchor="middle" font-size="12" font-weight="700" fill="${col}">${esc(c.name)}</text>
-        <text x="${mid}" y="${busY + 34}" text-anchor="middle" font-size="10" letter-spacing="1" fill="${C.muted}">${c.closed ? 'CLOSED' : 'OPEN'}</text>
+        <text x="${mid}" y="${busY + 34}" text-anchor="middle" font-size="10" letter-spacing="1" fill="${c.closed ? C.prot : C.muted}">${c.closed ? 'CLOSED · TIED' : 'OPEN'}</text>
       </g>`);
     });
 
@@ -1561,6 +1712,9 @@
 
   // ------------------------------------------------------------ event delegation
   document.addEventListener('click', async e => {
+    // The click that follows a drag belongs to the drag, not to whatever it
+    // was dropped on. Anything later is a real click.
+    if (Date.now() - hvDragEndedAt < 350) { hvDragEndedAt = 0; e.stopPropagation(); return; }
     if (e.target.closest('[data-stop]')) return;
     const el = e.target.closest('[data-action]');
     if (!el) return;

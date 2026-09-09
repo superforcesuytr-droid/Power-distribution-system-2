@@ -467,3 +467,80 @@ func (s *Store) MoveHVDevice(ctx context.Context, role string, id int64, delta i
 		return s.audit(ctx, tx, role, "update", "hv_device", id, "Moved a "+kind+" along its way")
 	})
 }
+
+// PlaceHVDevice moves a device to a position on a way, which may be a
+// different way from the one it is on. afterID names the device it should sit
+// below; zero puts it at the head of the chain. This is what a drag onto the
+// diagram resolves to, where a move one place at a time cannot express it.
+func (s *Store) PlaceHVDevice(ctx context.Context, role string, id, wayID, afterID int64) error {
+	return s.withTx(ctx, func(tx pgx.Tx) error {
+		var fromWay int64
+		var kind, name string
+		if err := tx.QueryRow(ctx, `SELECT way_id, kind::text, name FROM hv_devices WHERE id = $1`, id).
+			Scan(&fromWay, &kind, &name); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
+		}
+		if wayID <= 0 {
+			wayID = fromWay
+		}
+		var exists bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM hv_ways WHERE id = $1)`, wayID).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			return &UserError{"That way no longer exists."}
+		}
+		if afterID == id {
+			return nil // dropped back where it came from
+		}
+
+		// Take it out of its current chain first, so positions either side
+		// close up whether or not the way is changing.
+		if _, err := tx.Exec(ctx, `UPDATE hv_devices SET position = -1 WHERE id = $1`, id); err != nil {
+			return err
+		}
+		if err := renumberDevices(ctx, tx, fromWay); err != nil {
+			return err
+		}
+
+		pos := 0
+		if afterID > 0 {
+			var at int
+			var owner int64
+			if err := tx.QueryRow(ctx, `SELECT position, way_id FROM hv_devices WHERE id = $1`, afterID).Scan(&at, &owner); err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return ErrNotFound
+				}
+				return err
+			}
+			if owner != wayID {
+				return &UserError{"Drop it onto a place on the same way."}
+			}
+			pos = at + 1
+		}
+		if _, err := tx.Exec(ctx, `UPDATE hv_devices SET position = position + 1
+			WHERE way_id = $1 AND position >= $2 AND id <> $3`, wayID, pos, id); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE hv_devices SET way_id = $2, position = $3, updated_at = now() WHERE id = $1`,
+			id, wayID, pos); err != nil {
+			return err
+		}
+		if err := renumberDevices(ctx, tx, wayID); err != nil {
+			return err
+		}
+		if fromWay != wayID {
+			if err := renumberDevices(ctx, tx, fromWay); err != nil {
+				return err
+			}
+		}
+		what := kind
+		if name != "" {
+			what += " " + name
+		}
+		return s.audit(ctx, tx, role, "update", "hv_device", id, "Moved "+what+" to a new place on the diagram")
+	})
+}
