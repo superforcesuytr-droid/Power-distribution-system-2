@@ -80,13 +80,14 @@ func main() {
 	// alongside whatever else is going, so it neither defers to a copy that is
 	// already serving nor claims to be the one that others should defer to.
 	soleInstance := *devDir == "" && *port == 0
+	dataPath := filepath.Join(config.Dir(cfgPath), "webview2")
 
 	// Launching the application while a copy is already serving should show
 	// that copy rather than start a second server against the same database.
 	if soleInstance && !*headless {
 		if existing, ok := instance.Existing(config.Dir(cfgPath)); ok {
 			log.Printf("already running at %s; showing that window instead of starting again", existing)
-			window.OpenBrowser(existing)
+			window.Reveal(existing, appTitle, dataPath, 1320, 900)
 			return
 		}
 	}
@@ -146,7 +147,6 @@ func main() {
 		log.Printf("running in browser mode; press Ctrl+C to stop")
 		<-ctx.Done()
 	default:
-		dataPath := filepath.Join(config.Dir(cfgPath), "webview2")
 		switch window.Open(url, appTitle, dataPath, 1320, 900) {
 		case window.Closed:
 			// The window was shown by us and has now been closed.

@@ -46,3 +46,8 @@ func OpenBrowser(url string) {
 		log.Printf("could not open browser automatically (%v); open %s manually", err, url)
 	}
 }
+
+// Reveal brings the interface of a copy that is already serving back on screen.
+func Reveal(url, title, dataPath string, width, height int) {
+	OpenBrowser(url)
+}

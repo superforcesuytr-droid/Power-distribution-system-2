@@ -48,25 +48,47 @@ func findAppModeBrowser() string {
 // tracked by the page itself, so Open reports Handed and leaves that to the
 // caller.
 func Open(url, title, dataPath string, width, height int) Mode {
-	if bin := findAppModeBrowser(); bin != "" {
-		cmd := exec.Command(bin,
-			"--app="+url,
-			"--user-data-dir="+dataPath,
-			fmt.Sprintf("--window-size=%d,%d", width, height),
-			"--no-first-run",
-			"--no-default-browser-check",
-		)
-		if err := cmd.Start(); err == nil {
-			// Reap the process when it exits so it does not linger as a zombie.
-			go func() { _ = cmd.Wait() }()
-			log.Printf("opened app window using %s", filepath.Base(bin))
-			return Handed
-		} else {
-			log.Printf("could not start %s (%v); falling back to the default browser", bin, err)
-		}
+	if openAppWindow(url, dataPath, width, height) {
+		return Handed
 	}
 	OpenBrowser(url)
 	return Handed
+}
+
+// Reveal brings the interface of a copy that is already serving back on
+// screen. It uses the same app-mode window as a first launch, so reopening the
+// application looks like the application rather than like a browser tab.
+func Reveal(url, title, dataPath string, width, height int) {
+	if !openAppWindow(url, dataPath, width, height) {
+		OpenBrowser(url)
+	}
+}
+
+// openAppWindow asks an installed Chromium browser for a chrome-less window and
+// reports whether one was launched.
+func openAppWindow(url, dataPath string, width, height int) bool {
+	bin := findAppModeBrowser()
+	if bin == "" {
+		return false
+	}
+	// A dedicated profile directory matters: with the user's normal profile the
+	// new process would hand the URL to the browser they already have open, and
+	// it would arrive as an ordinary tab rather than a window of our own.
+	cmd := exec.Command(bin,
+		"--app="+url,
+		"--user-data-dir="+dataPath,
+		fmt.Sprintf("--window-size=%d,%d", width, height),
+		"--no-first-run",
+		"--no-default-browser-check",
+	)
+	if err := cmd.Start(); err != nil {
+		log.Printf("could not start %s (%v); falling back to the default browser", bin, err)
+		return false
+	}
+	// Reap the process when it exits so it does not linger as a zombie.
+	go func() { _ = cmd.Wait() }()
+	log.Printf("opened app window using %s", filepath.Base(bin))
+	return true
 }
 
 // OpenBrowser launches the default browser at url.
