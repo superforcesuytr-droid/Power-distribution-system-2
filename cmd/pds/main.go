@@ -139,8 +139,12 @@ func main() {
 		<-ctx.Done()
 	default:
 		dataPath := filepath.Join(config.Dir(cfgPath), "webview2")
-		if closed := window.Open(url, appTitle, dataPath, 1320, 900); !closed {
-			// Browser fallback: keep serving until interrupted.
+		switch window.Open(url, appTitle, dataPath, 1320, 900) {
+		case window.Closed:
+			// The window was shown by us and has now been closed.
+		case window.Handed:
+			waitForWindow(ctx, srv)
+		default:
 			log.Printf("running in browser mode; press Ctrl+C to stop")
 			<-ctx.Done()
 		}
@@ -150,4 +154,46 @@ func main() {
 	defer cancelShutdown()
 	_ = httpSrv.Shutdown(shutdownCtx)
 	log.Printf("stopped")
+}
+
+// waitForWindow blocks until the interface window goes away.
+//
+// The page holds a connection open for as long as it is on screen, so counting
+// those connections tells us when the window has closed. The browser process
+// cannot: the browser showing the window is often one the operator already had
+// running, which neither starts nor exits with us, and a browser asked to open
+// a window when it is already running hands the request to the running copy and
+// exits immediately.
+func waitForWindow(ctx context.Context, srv *api.Server) {
+	const (
+		startup = 2 * time.Minute // allow for a slow first paint
+		linger  = 8 * time.Second // survive a page reload
+	)
+	started := time.Now()
+	var emptySince time.Time
+
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			live, seen := srv.Windows()
+			switch {
+			case live > 0:
+				emptySince = time.Time{}
+			case !seen:
+				if time.Since(started) > startup {
+					log.Printf("no window connected within %s; stopping", startup)
+					return
+				}
+			case emptySince.IsZero():
+				emptySince = time.Now()
+			case time.Since(emptySince) > linger:
+				log.Printf("window closed; stopping")
+				return
+			}
+		}
+	}
 }

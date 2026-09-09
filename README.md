@@ -88,7 +88,9 @@ written beside the config file.
 4. Choose your role in the top-right corner and start working.
 
 The app has no Dock icon of its own, because the window it opens belongs to the
-browser hosting the interface. **Closing that window quits the application.**
+browser hosting the interface. **Closing that window quits the application**,
+which it notices from the window itself rather than from the browser process,
+because that browser is often one you already had running.
 Opening the app again while it is already running reveals the window that is
 already there rather than starting a second copy against the same database.
 

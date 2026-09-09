@@ -7,12 +7,11 @@ import (
 	"os/exec"
 )
 
-// Open shows the UI. On these platforms there is no embedded webview, so the
-// default browser is used and Open returns false to signal that the caller
-// should keep the server alive until interrupted.
-func Open(url, title, dataPath string, width, height int) bool {
+// Open shows the UI in the default browser, whose lifetime is not ours to
+// observe, so the caller watches the page instead.
+func Open(url, title, dataPath string, width, height int) Mode {
 	OpenBrowser(url)
-	return false
+	return Handed
 }
 
 // OpenBrowser launches the system browser at url.

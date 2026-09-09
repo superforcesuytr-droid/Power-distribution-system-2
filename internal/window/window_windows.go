@@ -12,9 +12,9 @@ import (
 
 // Open shows the UI in a native window backed by the Microsoft Edge WebView2
 // runtime (pre-installed on Windows 10 21H2+ and Windows 11). It blocks until
-// the window is closed and returns true. If WebView2 is unavailable it falls
-// back to the default browser and returns false so the caller keeps serving.
-func Open(url, title, dataPath string, width, height int) bool {
+// that window is closed. If WebView2 is unavailable it hands the interface to
+// the default browser instead, whose lifetime is not ours to observe.
+func Open(url, title, dataPath string, width, height int) Mode {
 	w := webview2.NewWithOptions(webview2.WebViewOptions{
 		Debug:     false,
 		AutoFocus: true,
@@ -29,13 +29,13 @@ func Open(url, title, dataPath string, width, height int) bool {
 	if w == nil {
 		log.Printf("WebView2 runtime not available; falling back to the default browser")
 		OpenBrowser(url)
-		return false
+		return Handed
 	}
 	defer w.Destroy()
 	w.SetSize(width, height, webview2.HintNone)
 	w.Navigate(url)
 	w.Run()
-	return true
+	return Closed
 }
 
 // OpenBrowser launches the default browser at url.

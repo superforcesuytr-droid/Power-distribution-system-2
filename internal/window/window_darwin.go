@@ -37,16 +37,18 @@ func findAppModeBrowser() string {
 	return ""
 }
 
-// Open shows the UI on macOS. It prefers an app-mode window from an installed
-// Chromium browser and blocks until that window is closed, returning true. With
-// no such browser it falls back to the default browser plus a small "running"
-// dialog that gives the operator a way to quit; if even that is unavailable it
-// returns false so the caller keeps serving until interrupted.
-func Open(url, title, dataPath string, width, height int) bool {
+// Open shows the UI on macOS in an app-mode window from an installed Chromium
+// browser, falling back to the default browser.
+//
+// It deliberately does not wait for the browser process. When a browser is
+// already running with the same profile, the process launched here passes the
+// address to that running copy and exits within milliseconds; waiting on it
+// would look exactly like the operator closing the window, and the application
+// would shut down the moment it had started. The window's real lifetime is
+// tracked by the page itself, so Open reports Handed and leaves that to the
+// caller.
+func Open(url, title, dataPath string, width, height int) Mode {
 	if bin := findAppModeBrowser(); bin != "" {
-		// A dedicated profile directory matters: with the user's normal profile
-		// the new process would hand the URL to the already-running browser and
-		// exit immediately, and we would quit before showing anything.
 		cmd := exec.Command(bin,
 			"--app="+url,
 			"--user-data-dir="+dataPath,
@@ -55,31 +57,16 @@ func Open(url, title, dataPath string, width, height int) bool {
 			"--no-default-browser-check",
 		)
 		if err := cmd.Start(); err == nil {
+			// Reap the process when it exits so it does not linger as a zombie.
+			go func() { _ = cmd.Wait() }()
 			log.Printf("opened app window using %s", filepath.Base(bin))
-			_ = cmd.Wait()
-			return true
+			return Handed
 		} else {
 			log.Printf("could not start %s (%v); falling back to the default browser", bin, err)
 		}
 	}
 	OpenBrowser(url)
-	return quitDialog(title, url)
-}
-
-// quitDialog blocks on a stock macOS dialog so the operator can stop the
-// application once they are finished with the browser tab. It reports whether
-// the dialog was actually shown.
-func quitDialog(title, url string) bool {
-	script := fmt.Sprintf(
-		`display dialog %q with title %q buttons {"Quit"} default button "Quit" with icon note`,
-		title+" is running.\n\nThe interface is open in your browser at "+url+
-			"\n\nLeave this dialog open while you work, then click Quit to stop the application.",
-		title)
-	if err := exec.Command("osascript", "-e", script).Run(); err != nil {
-		log.Printf("running in browser mode; press Ctrl+C to stop (%v)", err)
-		return false
-	}
-	return true
+	return Handed
 }
 
 // OpenBrowser launches the default browser at url.

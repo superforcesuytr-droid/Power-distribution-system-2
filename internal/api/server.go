@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/superforcesuytr-droid/power-distribution-system/internal/config"
@@ -28,6 +29,21 @@ type Server struct {
 	Version string
 	LogPath string
 	Dev     bool
+
+	// windows counts the interface windows currently on screen, and seen
+	// records whether one has ever connected. A window holds an event-stream
+	// connection open for as long as it is displayed, which is what lets the
+	// application know when it has been closed. That cannot be inferred from
+	// the browser process itself: the browser showing the window is often one
+	// the operator already had running, so it neither starts nor exits with us.
+	windows atomic.Int64
+	seen    atomic.Bool
+}
+
+// Windows reports how many interface windows are open, and whether one has
+// ever connected.
+func (s *Server) Windows() (live int64, seen bool) {
+	return s.windows.Load(), s.seen.Load()
 }
 
 // Handler builds the router.
@@ -36,6 +52,7 @@ func (s *Server) Handler() http.Handler {
 
 	// Meta
 	mux.HandleFunc("GET /api/status", s.handleStatus)
+	mux.HandleFunc("GET /api/session", s.handleSession)
 	mux.HandleFunc("GET /api/setup", s.handleSetupGet)
 	mux.HandleFunc("POST /api/setup/test", s.handleSetupTest)
 	mux.HandleFunc("POST /api/setup", s.handleSetupSave)
@@ -104,7 +121,9 @@ func (s *Server) logging(next http.Handler) http.Handler {
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: 200}
 		next.ServeHTTP(rec, r)
-		if strings.HasPrefix(r.URL.Path, "/api/") {
+		// The session stream stays open for the life of the window, so logging
+		// it on completion would only ever record its teardown.
+		if strings.HasPrefix(r.URL.Path, "/api/") && r.URL.Path != "/api/session" {
 			log.Printf("%s %s -> %d (%s)", r.Method, r.URL.RequestURI(), rec.status, time.Since(start).Round(time.Millisecond))
 		}
 	})
@@ -128,6 +147,49 @@ type statusRecorder struct {
 func (r *statusRecorder) WriteHeader(code int) {
 	r.status = code
 	r.ResponseWriter.WriteHeader(code)
+}
+
+// Flush keeps the wrapper transparent to streaming responses.
+func (r *statusRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// handleSession holds a connection open for as long as the interface window
+// is on screen. The application watches the number of open sessions to decide
+// when its window has gone and it should stop.
+func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "streaming is not supported")
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+
+	s.windows.Add(1)
+	s.seen.Store(true)
+	defer s.windows.Add(-1)
+
+	fmt.Fprint(w, ": open\n\n")
+	flusher.Flush()
+
+	ticker := time.NewTicker(20 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+	}
 }
 
 func roleOf(r *http.Request) string {

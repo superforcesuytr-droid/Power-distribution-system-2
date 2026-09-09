@@ -1069,6 +1069,17 @@
   }
 
   // ------------------------------------------------------------ init
+  // Hold a connection open for as long as this window is on screen. The local
+  // application watches these connections to know when its window has been
+  // closed and it can stop; without it, it would go on running unseen after the
+  // window is gone, because the browser showing the window is often one the
+  // user already had running and does not exit with it.
+  try {
+    const session = new EventSource('/api/session');
+    session.onerror = () => { /* EventSource reconnects on its own */ };
+    window.addEventListener('pagehide', () => session.close());
+  } catch (_) { /* no EventSource: the application falls back to its own timeout */ }
+
   $('#today').textContent = fmtDate(new Date());
   const roleSel = $('#role-select');
   roleSel.value = state.role;
