@@ -164,7 +164,7 @@ func (s *Store) HVNetwork(ctx context.Context, id int64) (*model.HVNetwork, erro
 	var feeders []model.HVFeeder
 	feederAt := map[int64]int{}
 	rows, err := pool.Query(ctx, `SELECT id, network_id, coalesce(section_id, 0), name, switchgear, kind, side,
-		voltage, source, rating_a, position, created_at, updated_at
+		voltage, source, rating_a, position, created_at, updated_at, offset_x
 		FROM hv_feeders WHERE network_id = $1 ORDER BY position, name`, n.ID)
 	if err != nil {
 		return nil, err
@@ -172,7 +172,7 @@ func (s *Store) HVNetwork(ctx context.Context, id int64) (*model.HVNetwork, erro
 	for rows.Next() {
 		var f model.HVFeeder
 		if err := rows.Scan(&f.ID, &f.NetworkID, &f.SectionID, &f.Name, &f.Switchgear, &f.Kind, &f.Side,
-			&f.Voltage, &f.Source, &f.RatingA, &f.Position, &f.CreatedAt, &f.UpdatedAt); err != nil {
+			&f.Voltage, &f.Source, &f.RatingA, &f.Position, &f.CreatedAt, &f.UpdatedAt, &f.OffsetX); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -190,7 +190,7 @@ func (s *Store) HVNetwork(ctx context.Context, id int64) (*model.HVNetwork, erro
 	wayAt := map[int64]int{}
 	wrows, err := pool.Query(ctx, `SELECT w.id, coalesce(w.section_id, 0), w.name, w.rating_a, w.side,
 		w.dest_board_id, w.dest_switchboard_id, w.dest_label, w.dest_detail, w.notes, w.position,
-		w.created_at, w.updated_at,
+		w.created_at, w.updated_at, w.offset_x,
 		coalesce(bo.code, ''), coalesce(b.name, ''), coalesce(sb.name, ''),
 		coalesce(sb.network_id, 0), coalesce(sbn.name, '')
 		FROM hv_ways w
@@ -207,7 +207,7 @@ func (s *Store) HVNetwork(ctx context.Context, id int64) (*model.HVNetwork, erro
 		var w model.HVWay
 		if err := wrows.Scan(&w.ID, &w.SectionID, &w.Name, &w.RatingA, &w.Side,
 			&w.DestBoardID, &w.DestSwitchboardID, &w.DestLabel, &w.DestDetail, &w.Notes, &w.Position,
-			&w.CreatedAt, &w.UpdatedAt,
+			&w.CreatedAt, &w.UpdatedAt, &w.OffsetX,
 			&w.DestBoardCode, &w.DestBuildingName, &w.DestSwitchboardName,
 			&w.DestNetworkID, &w.DestNetworkName); err != nil {
 			wrows.Close()
@@ -920,6 +920,46 @@ func (s *Store) DeleteHVWay(ctx context.Context, role string, id int64) error {
 
 // PlaceHVWay moves an outgoing way to a position along a bus section, which may
 // be a different section from the one it taps now.
+// PlaceHVWayAt puts a way at a place of its own along a bus section, as a
+// fraction of that section's width, rather than in the row of evenly spaced
+// slots. A nil offset hands it back to the automatic spacing.
+func (s *Store) PlaceHVWayAt(ctx context.Context, role string, id, sectionID int64, offset *float64) error {
+	return s.withTx(ctx, func(tx pgx.Tx) error {
+		var name string
+		if err := tx.QueryRow(ctx, `SELECT name FROM hv_ways WHERE id = $1`, id).Scan(&name); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE hv_ways SET offset_x = $2,
+			section_id = coalesce(nullif($3::bigint, 0), section_id), updated_at = now()
+			WHERE id = $1`, id, offset, sectionID); err != nil {
+			return err
+		}
+		return s.audit(ctx, tx, role, "update", "hv_way", id, "Placed way "+name+" on the busbar")
+	})
+}
+
+// PlaceHVFeederAt does the same for an incomer.
+func (s *Store) PlaceHVFeederAt(ctx context.Context, role string, id, sectionID int64, offset *float64) error {
+	return s.withTx(ctx, func(tx pgx.Tx) error {
+		var name string
+		if err := tx.QueryRow(ctx, `SELECT name FROM hv_feeders WHERE id = $1`, id).Scan(&name); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE hv_feeders SET offset_x = $2,
+			section_id = coalesce(nullif($3::bigint, 0), section_id), updated_at = now()
+			WHERE id = $1`, id, offset, sectionID); err != nil {
+			return err
+		}
+		return s.audit(ctx, tx, role, "update", "hv_feeder", id, "Placed feeder "+name+" on the busbar")
+	})
+}
+
 func (s *Store) PlaceHVWay(ctx context.Context, role string, id, sectionID int64, index int, side string) error {
 	return s.withTx(ctx, func(tx pgx.Tx) error {
 		var networkID, from int64

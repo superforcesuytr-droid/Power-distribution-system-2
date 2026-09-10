@@ -853,7 +853,7 @@
             <div><div class="n">${net.linked_count}</div><div class="l">Linked</div></div>
           </div>
         </div>
-        ${canEdit() ? `<p class="sld-hint">Click a destination box to open that board. <b>+ Way</b> taps a bus section, which every feeder on it backs. On a way, <b>+</b> fits a device below and clicking one changes or removes it. To rearrange a bar, take a way or feeder by its dot on the busbar and slide it left or right. A way can feed a switchboard drawn below, or one on another drawing, instead of a destination box.</p>` : ''}
+        ${canEdit() ? `<p class="sld-hint">Click a destination box to open that board. <b>+ Way</b> taps a bus section, which every feeder on it backs. On a way, <b>+</b> fits a device below and clicking one changes or removes it. To arrange a bar, take a way or feeder by its dot on the busbar and drop it wherever along that bar it belongs. A way can feed a switchboard drawn below, or one on another drawing, instead of a destination box.</p>` : ''}
         ${nets.length > 1 || canManage() ? `<div class="hv-tiers">
           ${nets.map(x => `<a class="tier-chip${x.id === net.id ? ' on' : ''}" href="#/hv/${x.id}">
             <b>${esc(x.name)}</b>${x.tier ? `<span class="tier-tag">${x.tier === 'ht' ? 'HT' : 'LT'}</span>` : ''}</a>`).join('')}
@@ -906,23 +906,26 @@
     // Where a whole column would land. The nearest section is taken rather than
     // only the one under the pointer, so a column can be dragged into the gap
     // at either end of a bar without having to hit it exactly.
+    // Where a column would land: anywhere along the bus section under the
+    // pointer, on a light grid so columns still line up with one another.
+    const GRID = 6;
     const slotAt = (cx, cy, kind) => {
       const p = toSvg(cx, cy);
       if (!p || !hvLayout) return null;
       let best = null, bestGap = Infinity;
       hvLayout.groups.forEach(run => {
         if (run.kind !== kind || p.y < run.top || p.y > run.bottom) return;
-        const gap = p.x < run.left ? run.left - p.x
-          : (p.x > run.left + run.width ? p.x - run.left - run.width : 0);
+        const gap = p.x < run.secLeft ? run.secLeft - p.x
+          : (p.x > run.secLeft + run.secWidth ? p.x - run.secLeft - run.secWidth : 0);
         if (gap < bestGap) { bestGap = gap; best = run; }
       });
-      if (!best || bestGap > 110) return null;
-      const index = Math.max(0, Math.min(best.ids.length,
-        best.ids.length ? Math.round((p.x - best.left) / best.pitch) : 0));
+      if (!best || bestGap > 140) return null;
+      const from = best.secLeft + Math.round((p.x - best.secLeft) / GRID) * GRID;
+      const x = Math.min(best.secLeft + best.secWidth, Math.max(best.secLeft, from));
       return {
-        sectionId: best.sectionId, side: best.side, index, ids: best.ids, name: best.name,
-        x: best.left + index * best.pitch - (best.pitch - best.colW) / 2 - 3, y: best.top,
-        w: 6, h: best.bottom - best.top,
+        sectionId: best.sectionId, name: best.name, x,
+        offset: (x - best.secLeft) / best.secWidth,
+        y: best.top, h: best.bottom - best.top,
       };
     };
 
@@ -935,36 +938,17 @@
     // bar opens a gap where it would land, so what will happen is the drawing
     // itself rather than a marker beside it.
     function layOut(e) {
-      const held = drag.zone;
-      hvLayout.groups.forEach(run => {
-        if (run.kind !== drag.column) return;
-        const on = held && run.sectionId === held.sectionId && run.side === held.side;
-        const ids = run.ids.slice();
-        const was = ids.indexOf(drag.id);
-        if (was >= 0) ids.splice(was, 1);
-        if (on) {
-          let k = held.index;
-          if (was >= 0 && k > was) k -= 1;
-          ids.splice(Math.max(0, Math.min(k, ids.length)), 0, drag.id);
-        } else if (was >= 0) {
-          ids.splice(was, 0, drag.id);
-        }
-        const span = ids.length ? ids.length * run.pitch - (run.pitch - run.colW) : run.colW;
-        const left = run.cx - span / 2;
-        ids.forEach((id, i) => {
-          const el = colEl(drag.column, id);
-          if (!el || id === drag.id) return;
-          shift(el, left + i * run.pitch + run.colW / 2 - Number(el.dataset.home));
-        });
-        if (on) {
-          const el = colEl(drag.column, drag.id);
-          const i = ids.indexOf(drag.id);
-          if (el) drag.snapTo = left + i * run.pitch + run.colW / 2 - Number(el.dataset.home);
-        }
-      });
-      const p = toSvg(e.clientX, e.clientY);
       const el = colEl(drag.column, drag.id);
-      if (el && p) shift(el, p.x - drag.fromX);
+      if (!el) return;
+      const held = drag.zone;
+      if (held) {
+        // It lands where it was dropped, so it follows the pointer there.
+        drag.snapTo = held.x - Number(el.dataset.home);
+        shift(el, drag.snapTo);
+        return;
+      }
+      const p = toSvg(e.clientX, e.clientY);
+      if (p) shift(el, p.x - drag.fromX);
     }
 
     function begin(source, e) {
@@ -993,7 +977,19 @@
       }
       const z = drag.column ? slotAt(e.clientX, e.clientY, drag.column) : zoneAt(e.clientX, e.clientY);
       drag.zone = z;
-      if (drag.column) { layOut(e); return; }
+      if (drag.column) {
+        // A guide down the bar at the place it will land.
+        if (z) {
+          hint.setAttribute('x', z.x - 1.5); hint.setAttribute('y', z.y);
+          hint.setAttribute('width', 3); hint.setAttribute('height', z.h);
+          hint.classList.add('bar');
+          hint.style.display = '';
+        } else {
+          hint.style.display = 'none';
+        }
+        layOut(e);
+        return;
+      }
       if (z) {
         hint.setAttribute('x', z.x); hint.setAttribute('y', z.y);
         hint.setAttribute('width', z.w); hint.setAttribute('height', z.h);
@@ -1025,13 +1021,9 @@
         if (!d.zone) { unshift(); return; }
         // The slot counts the columns as drawn, so a column moving right
         // within its own section passes over its own place on the way.
-        const at = d.zone.ids.indexOf(d.id);
-        let index = d.zone.index;
-        if (at >= 0 && index > at) index -= 1;
-        if (at === index) { unshift(); return; }
         try {
           await api('POST', `/api/hv/${d.column === 'way' ? 'ways' : 'feeders'}/${d.id}/place`,
-            { section_id: d.zone.sectionId, index, side: d.zone.side || '' });
+            { section_id: d.zone.sectionId, offset_x: Number(d.zone.offset.toFixed(5)) });
           await afterChange(d.label + ' moved');
         } catch (err) { unshift(); toast(err.message, 'error'); }
         return;
@@ -1140,8 +1132,10 @@
     const planSection = sec => {
       const sided = sec.feeders.some(f => f.side) || sec.ways.some(w => w.side);
       const plan = { sec, sided };
+      plan.autoF = sec.feeders.filter(f => f.offset_x == null);
+      plan.autoW = sec.ways.filter(w => w.offset_x == null);
       if (!sided) {
-        const nf = Math.max(1, sec.feeders.length), nw = Math.max(1, sec.ways.length);
+        const nf = Math.max(1, plan.autoF.length), nw = Math.max(1, plan.autoW.length);
         plan.width = Math.max(nf * FEEDER_W, runW(nw), 420);
         return plan;
       }
@@ -1149,9 +1143,9 @@
       plan.rf = split(sec.feeders, 'r');
       plan.lw = split(sec.ways, 'l');
       plan.rw = split(sec.ways, 'r');
-      plan.bandW = Math.max(1, plan.lf.length + plan.rf.length) * FEEDER_W;
-      plan.lwW = runW(plan.lw.length);
-      plan.rwW = runW(plan.rw.length);
+      plan.bandW = Math.max(1, plan.autoF.length) * FEEDER_W;
+      plan.lwW = runW(plan.lw.filter(w => w.offset_x == null).length);
+      plan.rwW = runW(plan.rw.filter(w => w.offset_x == null).length);
       plan.width = Math.max(plan.bandW + plan.lwW + plan.rwW + SIDE_PAD * 2, 420);
       return plan;
     };
@@ -1215,15 +1209,16 @@
         const at = new Map();
         sg.groups = [];
         const lay = (list, kind, side, start, pitch, colW) => {
-          list.forEach((item, k) => at.set(item.id, start + k * pitch + colW / 2));
-          const width = list.length ? list.length * pitch - (pitch - colW) : colW;
+          const auto = list.filter(item => item.offset_x == null);
+          auto.forEach((item, k) => at.set(item.id, start + k * pitch + colW / 2));
+          const width = auto.length ? auto.length * pitch - (pitch - colW) : colW;
           sg.groups.push({
-            kind, side, ids: list.map(item => item.id), left: start, width,
+            kind, side, ids: auto.map(item => item.id), left: start, width,
             cx: start + width / 2, pitch, colW,
           });
         };
         if (!sg.sided) {
-          const nf = sg.sec.feeders.length, nw = sg.sec.ways.length;
+          const nf = sg.autoF.length, nw = sg.autoW.length;
           lay(sg.sec.feeders, 'feeder', '', sg.cx - nf * FEEDER_W / 2, FEEDER_W, FEEDER_W);
           lay(sg.sec.ways, 'way', '', sg.cx - runW(nw) / 2, WAY_W + WAY_GAP, WAY_W);
         } else {
@@ -1235,6 +1230,11 @@
           lay(sg.rf, 'feeder', 'r', bandLeft + sg.lf.length * FEEDER_W, FEEDER_W, FEEDER_W);
           lay(sg.rw, 'way', 'r', bandLeft + sg.bandW + pad, WAY_W + WAY_GAP, WAY_W);
         }
+        // A column placed by hand sits exactly where it was put, as a fraction
+        // of the section's width, and takes no slot from the rest.
+        const placed = item => sg.left + Math.min(1, Math.max(0, Number(item.offset_x))) * sg.width;
+        sg.sec.feeders.forEach(f => { if (f.offset_x != null) at.set(f.id, placed(f)); });
+        sg.sec.ways.forEach(w => { if (w.offset_x != null) at.set(w.id, placed(w)); });
         sg.feederX = sg.sec.feeders.map(f => at.get(f.id));
         sg.wayX = sg.sec.ways.map(w => at.get(w.id));
         x += sg.width + SECTION_GAP;
@@ -1269,6 +1269,7 @@
     boards.forEach(g => g.secs.forEach(sg => sg.groups.forEach(run => {
       hvLayout.groups.push({
         ...run, sectionId: sg.sec.id, name: sg.sec.name,
+        secLeft: sg.left, secWidth: sg.width,
         top: run.kind === 'way' ? g.busY - 20 : g.feederY - 46,
         bottom: run.kind === 'way' ? g.bottom + 20 : g.busY + 20,
       });
@@ -1384,7 +1385,7 @@
             x="${cx - FEEDER_W / 2 + 8}" y="${feederY - 30}" width="${FEEDER_W - 16}" height="${busY - feederY + 20}" rx="12"/>`);
           const gen = f.kind === 'generator';
           out.push(`<g${canManage() ? ' class="hv-grab"' : ''}${fGrab}>
-            <title>${esc(f.name)}${f.side ? ' · backs the ' + (f.side === 'r' ? 'right' : 'left') + ' of the bar' : ''}${gen ? ' · generator' : ''}${canManage() ? ' - drag left or right to move it along the busbar' : ''}</title>
+            <title>${esc(f.name)}${f.side ? ' · backs the ' + (f.side === 'r' ? 'right' : 'left') + ' of the bar' : ''}${gen ? ' · generator' : ''}${canManage() ? ' - drag it anywhere along the busbar' : ''}</title>
             <rect x="${cx - FEEDER_W / 2 + 10}" y="${feederY - 26}" width="${FEEDER_W - 20}" height="${gen ? 56 : 46}" rx="9" fill="transparent"/>
             <text x="${cx}" y="${gen ? feederY - 12 : feederY}" text-anchor="middle" font-size="19" font-weight="700" fill="${C.label}">${esc(f.name)}${f.side ? ` <tspan font-size="15" fill="${C.bus}">(${f.side.toUpperCase()})</tspan>` : ''}</text>
             ${gen ? hvGenerator(cx, feederY + 12, C.line)
@@ -1392,7 +1393,7 @@
           </g>`);
           out.push(`<line x1="${cx}" y1="${feederY + (gen ? 36 : 28)}" x2="${cx}" y2="${busY}" stroke="${C.bus}" stroke-width="3"/>`);
           const fHandle = hvHandle(cx, busY, C.bus, canManage() ? fGrab : '',
-            esc(f.name) + ' - drag left or right to move this feeder along the busbar');
+            esc(f.name) + ' - drag it anywhere along the busbar');
 
           if (canManage()) {
             out.push(`<g class="sld-btn" data-action="hv-edit-feeder" data-id="${f.id}"><title>Edit feeder ${esc(f.name)}</title>
@@ -1459,7 +1460,7 @@
           out.push(`<rect class="hv-col-plate${canEdit() ? ' hv-grab' : ''}"${wGrab} fill="${C.bus}" fill-opacity="0"
             x="${wx - WAY_W / 2 + 6}" y="${busY + 8}" width="${WAY_W - 12}" height="${(below ? foot + 30 : (shared ? turnY + 12 : destY + DEST_H)) - busY}" rx="12"/>`);
           const wHandle = hvHandle(wx, busY, C.bus, wGrab,
-            esc(way.name) + ' - drag left or right to move this way along the bar');
+            esc(way.name) + ' - drag it anywhere along the bar');
           out.push(`<line x1="${wx}" y1="${busY}" x2="${wx}" y2="${foot}" stroke="${C.line}" stroke-width="2.5"/>`);
           if (shared && enterX !== wx) {
             out.push(`<polyline points="${wx},${turnY} ${enterX},${turnY} ${enterX},${destY}" fill="none"
@@ -1923,10 +1924,16 @@
       ${lowTension ? '' : field('Switchgear designation', 'switchgear', isEdit ? (f.switchgear || '') : '', { placeholder: '22SGI5', hint: 'Written up the side of the breaker.', attrs: 'style="text-transform:uppercase"' })}
       ${field('Voltage', 'voltage', isEdit ? f.voltage : (state.hv.voltage || '22kV'), { placeholder: '22kV' })}
       ${field('Source', 'source', isEdit ? f.source : '', { full: true, placeholder: 'e.g. Incoming supply 5, intake substation' })}
-      ${field('Switchgear rating (A)', 'rating_a', isEdit && f.rating_a != null ? f.rating_a : '', { type: 'number', attrs: 'min="0" max="100000" step="any"', hint: 'Optional' })}`,
+      ${field('Switchgear rating (A)', 'rating_a', isEdit && f.rating_a != null ? f.rating_a : '', { type: 'number', attrs: 'min="0" max="100000" step="any"', hint: 'Optional' })}
+      ${isEdit && f.offset_x != null ? `<div class="field inline full"><input type="checkbox" name="auto" id="f_auto"><label for="f_auto">Space this incomer automatically along the bar again</label></div>` : ''}`,
       async d => {
         const body = { name: d.name, switchgear: d.switchgear === undefined ? (isEdit ? (f.switchgear || '') : '') : d.switchgear, kind: d.kind, section_id: Number(d.section_id), voltage: d.voltage, source: d.source, rating_a: d.rating_a === '' ? null : Number(d.rating_a), arrangement: d.arrangement || 'switchgear', transformer: d.transformer || '', side: d.side === undefined ? (isEdit ? (f.side || '') : '') : d.side };
-        if (isEdit) { state.focus = 'hv-feeder-' + f.id; await api('PUT', '/api/hv/feeders/' + f.id, body); await afterChange('Feeder updated'); }
+        if (isEdit) {
+          state.focus = 'hv-feeder-' + f.id;
+          await api('PUT', '/api/hv/feeders/' + f.id, body);
+          if (d.auto === 'on') await api('POST', '/api/hv/feeders/' + f.id + '/place', { auto: true });
+          await afterChange('Feeder updated');
+        }
         else { const r = await api('POST', '/api/hv/feeders', body); state.focus = 'hv-feeder-' + r.id; await afterChange('Feeder added'); }
       },
       isEdit && canManage() ? { deleteLabel: 'Delete feeder', onDelete: () => hvDeleteFeeder(f) } : {});
@@ -1980,7 +1987,8 @@
       ${field('Or destination label', 'dest_label', isEdit ? way.dest_label : '', { placeholder: 'e.g. FAC1/PE1, when it is not a board here' })}
       ${field('Where at that destination', 'dest_detail', isEdit ? (way.dest_detail || '') : '', { placeholder: 'e.g. TX15', hint: 'The transformer or panel the way terminates on.' })}
       ${field('Notes', 'notes', isEdit ? way.notes : '', { type: 'textarea', full: true })}
-      ${isEdit ? `<p class="field full hint" style="margin:0">What is fitted on this way is set on the diagram: the <b>+</b> beside a device adds another below it, and clicking a device changes or removes it.</p>` : ''}`,
+      ${isEdit && way.offset_x != null ? `<div class="field inline full"><input type="checkbox" name="auto" id="way_auto"><label for="way_auto">Space this way automatically along the bar again</label></div>` : ''}
+      ${isEdit ? `<p class="field full hint" style="margin:0">What is fitted on this way is set on the diagram: the <b>+</b> beside a device adds another below it, and clicking a device changes or removes it. Drag its dot on the busbar to put it wherever it belongs.</p>` : ''}`,
       async d => {
         const body = {
           section_id: Number(d.section_id), name: d.name,
@@ -1991,7 +1999,12 @@
           head_kind: lowTension ? 'none' : (d.head_kind || 'switchgear'), chiller: d.chiller || '',
           side: d.side === undefined ? (isEdit ? (way.side || '') : '') : d.side,
         };
-        if (isEdit) { state.focus = 'hv-way-' + way.id; await api('PUT', '/api/hv/ways/' + way.id, body); await afterChange('Way updated'); }
+        if (isEdit) {
+          state.focus = 'hv-way-' + way.id;
+          await api('PUT', '/api/hv/ways/' + way.id, body);
+          if (d.auto === 'on') await api('POST', '/api/hv/ways/' + way.id + '/place', { auto: true });
+          await afterChange('Way updated');
+        }
         else { const r = await api('POST', '/api/hv/ways', body); state.focus = 'hv-way-' + r.id; await afterChange('Way added'); }
       },
       isEdit && canManage() ? { wide: true, deleteLabel: 'Delete way', onDelete: () => hvDeleteWay(way) } : { wide: true });

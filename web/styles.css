@@ -351,6 +351,7 @@ rect.drop-hint { fill: rgba(11,116,196,.14); stroke: var(--primary); stroke-widt
 }
 .tier-chip.on .tier-tag { background: rgba(255,255,255,.22); color: #fff; }
 
+rect.drop-hint.bar { fill: var(--primary); fill-opacity: .85; stroke: none; }
 .hv-grab { cursor: grab; }
 .sld-canvas.dropping .hv-grab { cursor: grabbing; }
 

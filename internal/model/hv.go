@@ -261,7 +261,10 @@ type HVFeeder struct {
 	Kind string `json:"kind"`
 	// Side is the end of the bar this incomer backs, on a board fed from both
 	// ends. Blank when the bar is not split into sides.
-	Side      string     `json:"side"`
+	Side string `json:"side"`
+	// OffsetX is where along its bus section it sits, as a fraction of that
+	// section's width. Null when it has never been placed by hand.
+	OffsetX   *float64   `json:"offset_x"`
 	Voltage   string     `json:"voltage"`
 	Source    string     `json:"source"`
 	RatingA   *float64   `json:"rating_a"`
@@ -280,6 +283,9 @@ type HVWay struct {
 	RatingA   *float64 `json:"rating_a"`
 	// Side is the end of the bar this way taps, on a board fed from both ends.
 	Side string `json:"side"`
+	// OffsetX is where along its bus section it taps, as a fraction of that
+	// section's width. Null when it has never been placed by hand.
+	OffsetX *float64 `json:"offset_x"`
 
 	// Devices are everything fitted on this way, in the order they appear down
 	// the conductor.

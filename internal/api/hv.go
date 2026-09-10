@@ -323,6 +323,12 @@ type hvPlaceInput struct {
 	Index     int   `json:"index"`
 	// Side is the end of the bar the column was dropped on.
 	Side string `json:"side"`
+	// OffsetX places the column at a point of its own along the section, as a
+	// fraction of that section's width. When it is given, the index and the
+	// side are not read: the column simply goes where it was dropped.
+	OffsetX *float64 `json:"offset_x"`
+	// Auto hands a column back to the automatic spacing.
+	Auto bool `json:"auto"`
 }
 
 func (s *Server) handleHVFeederPlace(w http.ResponseWriter, r *http.Request) {
@@ -334,6 +340,21 @@ func (s *Server) handleHVFeederPlace(w http.ResponseWriter, r *http.Request) {
 	var in hvPlaceInput
 	if err := decode(r, &in); err != nil {
 		fail(w, err)
+		return
+	}
+	if in.Auto || in.OffsetX != nil {
+		if in.OffsetX != nil && (*in.OffsetX < 0 || *in.OffsetX > 1) {
+			fail(w, &db.UserError{Msg: "A place on the busbar is a fraction of its width."})
+			return
+		}
+		if in.Auto {
+			in.OffsetX = nil
+		}
+		if err := s.Store.PlaceHVFeederAt(ctx(r), roleOf(r), id, in.SectionID, in.OffsetX); err != nil {
+			fail(w, err)
+			return
+		}
+		writeJSON(w, 200, map[string]bool{"ok": true})
 		return
 	}
 	if !model.ValidSide(in.Side) {
@@ -588,6 +609,21 @@ func (s *Server) handleHVWayPlace(w http.ResponseWriter, r *http.Request) {
 	var in hvPlaceInput
 	if err := decode(r, &in); err != nil {
 		fail(w, err)
+		return
+	}
+	if in.Auto || in.OffsetX != nil {
+		if in.OffsetX != nil && (*in.OffsetX < 0 || *in.OffsetX > 1) {
+			fail(w, &db.UserError{Msg: "A place on the busbar is a fraction of its width."})
+			return
+		}
+		if in.Auto {
+			in.OffsetX = nil
+		}
+		if err := s.Store.PlaceHVWayAt(ctx(r), roleOf(r), id, in.SectionID, in.OffsetX); err != nil {
+			fail(w, err)
+			return
+		}
+		writeJSON(w, 200, map[string]bool{"ok": true})
 		return
 	}
 	if !model.ValidSide(in.Side) {
