@@ -1140,7 +1140,7 @@
     const C = { bus: '#0b74c4', line: '#334155', tx: '#7c3aed', prot: '#d97a06', dest: '#0f8a4f', muted: '#94a3b8', label: '#475569' };
     const WAY_W = 182, WAY_GAP = 16, FEEDER_W = 248, SECTION_GAP = 120, MARGIN = 44, BOARD_GAP = 104;
     const STACK_GAP = 150;
-    const DEV_GAP = 64, DEST_H = 44, DEST_W = 152, DEST_MIN_W = 76;
+    const DEV_GAP = 64, DEST_H = 52, DEST_W = 172, DEST_MIN_W = 94;
     // How far to the left of a conductor a rotated designation is written, far
     // enough out that it never sits on the symbol it names.
     const TAG_X = 30;
@@ -1584,7 +1584,7 @@
       });
       // One size of type across the board, chosen so it fits the narrowest box.
       const narrow = boxes.reduce((m, box) => Math.min(m, box.w), DEST_W);
-      const boxFont = narrow >= 132 ? 13 : (narrow >= 104 ? 11.5 : 10);
+      const boxFont = narrow >= 148 ? 14 : (narrow >= 120 ? 12.5 : 11);
       // Boxes that will not fit side by side are placed as one group, and the
       // group sits where it leaves every box in it as near its own ways as it
       // can. A crowded stretch of bar then opens out both ways instead of
@@ -1813,8 +1813,8 @@
               <title>${esc(label)}${shared ? ' · fed by ' + esc(names) : (way.dest_detail ? ' · ' + esc(way.dest_detail) : '')}${across ? ' on ' + esc(way.dest_network_name) + ' - click to open that drawing' : (linked ? ' - click to open this board' : (destAct ? ' - click to set where this way feeds' : ''))}</title>
               <rect x="${box.cx - box.w / 2}" y="${destY}" width="${box.w}" height="${DEST_H}" rx="8"
                     fill="${linked ? '#f2fbf6' : '#f8fafc'}" stroke="${dcol}" stroke-width="2"/>
-              <text x="${box.cx}" y="${destY + 19}" text-anchor="middle" font-size="${boxFont}" font-weight="700" fill="${linked ? '#0f8a4f' : '#64748b'}">${esc(fitText(label, box.w, boxFont))}</text>
-              <text x="${box.cx}" y="${destY + 33}" text-anchor="middle" font-size="${boxFont - 3.5}" fill="${C.muted}">${esc(fitText(sub, box.w, boxFont - 3.5))}</text>
+              <text x="${box.cx}" y="${destY + 22}" text-anchor="middle" font-size="${boxFont}" font-weight="700" fill="${linked ? '#0f8a4f' : '#64748b'}">${esc(fitText(label, box.w, boxFont))}</text>
+              <text x="${box.cx}" y="${destY + 38}" text-anchor="middle" font-size="${boxFont - 3.5}" fill="${C.muted}">${esc(fitText(sub, box.w, boxFont - 3.5))}</text>
             </g>`);
           }
           if (canEdit()) {
@@ -2619,6 +2619,7 @@
   // ---- switchboards
   function hvBoardForm(board) {
     const isEdit = !!(board && board.id);
+    const wayCount = isEdit ? board.sections.reduce((t, sec) => t + sec.ways.length, 0) : 0;
     formModal(isEdit ? 'Edit ' + board.name : 'Add switchboard', `
       ${field('Switchboard name', 'name', isEdit ? board.name : '', { required: true, full: true, placeholder: 'e.g. 6.6kV Switchboard' })}
       ${field('Voltage', 'voltage', isEdit ? board.voltage : '', { placeholder: '6.6kV' })}
@@ -2634,7 +2635,23 @@
         if (isEdit) { await api('PUT', '/api/hv/switchboards/' + board.id, body); await afterChange('Switchboard updated'); }
         else { await api('POST', '/api/hv/switchboards?network=' + ((state.hv || {}).id || 0), body); await afterChange('Switchboard added'); }
       },
-      isEdit && canManage() ? { wide: true, deleteLabel: 'Delete switchboard', onDelete: () => hvDeleteBoard(board) } : { wide: true });
+      isEdit && canManage() ? { wide: true, deleteLabel: 'Delete switchboard', onDelete: () => hvDeleteBoard(board),
+        extra: wayCount ? `<button type="button" class="btn btn-danger left" data-act="clear-ways">Remove all ${wayCount} ways</button>` : '' } : { wide: true });
+    if (isEdit && canManage() && wayCount) {
+      const btn = $('[data-act=clear-ways]');
+      if (btn) btn.addEventListener('click', () => hvClearWays(board));
+    }
+  }
+  // Starting a switchboard's ways again from nothing, which is a great deal
+  // quicker than deleting three dozen of them one at a time.
+  function hvClearWays(board) {
+    const ways = board.sections.flatMap(sec => sec.ways);
+    if (!ways.length) return;
+    confirmModal('Remove every way', `Remove all <b>${ways.length}</b> outgoing ways from <b>${esc(board.name)}</b>, with every device fitted on them and wherever they were said to feed? The switchboard, its bus sections, its couplers and its incomers all stay. This cannot be undone.`,
+      async () => {
+        for (const w of ways) await api('DELETE', '/api/hv/ways/' + w.id);
+        await afterChange('Removed ' + plural(ways.length, 'way'));
+      }, 'Remove them all');
   }
   function hvDeleteBoard(board) {
     if (board.sections.length) {
