@@ -98,9 +98,13 @@ func ValidFeederKind(k string) bool {
 // switchboards, drawn top to bottom in the order the site steps down through
 // them.
 type HVNetwork struct {
-	ID           int64           `json:"id"`
-	Name         string          `json:"name"`
-	Voltage      string          `json:"voltage"`
+	ID      int64  `json:"id"`
+	Name    string `json:"name"`
+	Voltage string `json:"voltage"`
+	// Tier says which drawing this is: the high-tension side of the site or the
+	// low-tension side. It is what the picker above the diagram labels.
+	Tier         string          `json:"tier"`
+	Position     int             `json:"position"`
 	Switchboards []HVSwitchboard `json:"switchboards"`
 
 	// Derived
@@ -111,6 +115,28 @@ type HVNetwork struct {
 	TransformerCount int `json:"transformer_count"`
 	ProtectedCount   int `json:"protected_count"`
 	LinkedCount      int `json:"linked_count"`
+}
+
+// Tiers a drawing can be at.
+const (
+	TierHT = "ht"
+	TierLT = "lt"
+)
+
+// Tiers lists every tier with the label the picker gives it.
+var Tiers = []struct{ Tier, Label string }{
+	{TierHT, "High tension"},
+	{TierLT, "Low tension"},
+}
+
+// ValidTier reports whether t names a tier a drawing can be at.
+func ValidTier(t string) bool {
+	for _, x := range Tiers {
+		if x.Tier == t {
+			return true
+		}
+	}
+	return false
 }
 
 // HVSwitchboard is one switchboard: its rating, the bus sections it is split
@@ -130,6 +156,12 @@ type HVSwitchboard struct {
 	Couplers  []HVCoupler `json:"couplers"`
 	CreatedAt time.Time   `json:"created_at"`
 	UpdatedAt time.Time   `json:"updated_at"`
+
+	// Derived, and only filled when switchboards are listed across the whole
+	// site: which drawing this one is on.
+	NetworkName     string `json:"network_name,omitempty"`
+	NetworkTier     string `json:"network_tier,omitempty"`
+	NetworkPosition int    `json:"network_position,omitempty"`
 }
 
 // Rating is the line written under a switchboard's name, in the form a
@@ -246,9 +278,14 @@ type HVWay struct {
 
 	// Derived: filled from the linked board so the diagram can label and link
 	// the destination without a second lookup.
-	DestBoardCode       string    `json:"dest_board_code"`
-	DestBuildingName    string    `json:"dest_building_name"`
+	DestBoardCode    string `json:"dest_board_code"`
+	DestBuildingName string `json:"dest_building_name"`
+	// DestSwitchboardName and DestNetworkID describe the switchboard a way
+	// lands on. When that board is on another drawing the way cannot be run
+	// down to it, so the destination box carries a link across instead.
 	DestSwitchboardName string    `json:"dest_switchboard_name"`
+	DestNetworkID       int64     `json:"dest_network_id"`
+	DestNetworkName     string    `json:"dest_network_name"`
 	CreatedAt           time.Time `json:"created_at"`
 	UpdatedAt           time.Time `json:"updated_at"`
 }

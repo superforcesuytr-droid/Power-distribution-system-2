@@ -11,17 +11,99 @@ import (
 	"github.com/superforcesuytr-droid/power-distribution-system/internal/model"
 )
 
-// HVNetwork loads the whole high-voltage overview: the switchboards top to
-// bottom, the bus sections each is split into, the feeders backing each
-// section and the ways tapping it, and the couplers between sections.
-func (s *Store) HVNetwork(ctx context.Context) (*model.HVNetwork, error) {
+// HVNetworks lists the drawings, high tension first, without loading what is
+// on any of them. It is what the picker above the diagram is built from.
+func (s *Store) HVNetworks(ctx context.Context) ([]model.HVNetwork, error) {
+	pool, err := s.getPool()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := pool.Query(ctx, `SELECT id, name, voltage, tier, position
+		FROM hv_networks ORDER BY position, id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []model.HVNetwork{}
+	for rows.Next() {
+		var n model.HVNetwork
+		if err := rows.Scan(&n.ID, &n.Name, &n.Voltage, &n.Tier, &n.Position); err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
+// HVSwitchboardList names every switchboard on the site with the drawing it is
+// on, so a way can be pointed at one on another drawing.
+func (s *Store) HVSwitchboardList(ctx context.Context) ([]model.HVSwitchboard, error) {
+	pool, err := s.getPool()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := pool.Query(ctx, `SELECT b.id, b.network_id, b.name, b.voltage, b.position,
+		n.name, n.tier, n.position
+		FROM hv_switchboards b JOIN hv_networks n ON n.id = b.network_id
+		ORDER BY n.position, n.id, b.position, b.id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []model.HVSwitchboard{}
+	for rows.Next() {
+		var b model.HVSwitchboard
+		if err := rows.Scan(&b.ID, &b.NetworkID, &b.Name, &b.Voltage, &b.Position,
+			&b.NetworkName, &b.NetworkTier, &b.NetworkPosition); err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+// NetworkOfSection says which drawing a bus section belongs to, so a feeder or
+// a way added to it lands on the same one.
+func (s *Store) NetworkOfSection(ctx context.Context, sectionID int64) (int64, error) {
+	pool, err := s.getPool()
+	if err != nil {
+		return 0, err
+	}
+	var id int64
+	err = pool.QueryRow(ctx, `SELECT network_id FROM hv_sections WHERE id = $1`, sectionID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	return id, err
+}
+
+// NetworkOfSwitchboard says which drawing a switchboard is on.
+func (s *Store) NetworkOfSwitchboard(ctx context.Context, boardID int64) (int64, error) {
+	pool, err := s.getPool()
+	if err != nil {
+		return 0, err
+	}
+	var id int64
+	err = pool.QueryRow(ctx, `SELECT network_id FROM hv_switchboards WHERE id = $1`, boardID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	return id, err
+}
+
+// HVNetwork loads one whole drawing: the switchboards top to bottom, the bus
+// sections each is split into, the feeders backing each section and the ways
+// tapping it, and the couplers between sections. An id of zero loads the first
+// drawing there is.
+func (s *Store) HVNetwork(ctx context.Context, id int64) (*model.HVNetwork, error) {
 	pool, err := s.getPool()
 	if err != nil {
 		return nil, err
 	}
 	var n model.HVNetwork
-	err = pool.QueryRow(ctx, `SELECT id, name, voltage FROM hv_networks ORDER BY id LIMIT 1`).
-		Scan(&n.ID, &n.Name, &n.Voltage)
+	err = pool.QueryRow(ctx, `SELECT id, name, voltage, tier, position FROM hv_networks
+		WHERE $1 = 0 OR id = $1 ORDER BY position, id LIMIT 1`, id).
+		Scan(&n.ID, &n.Name, &n.Voltage, &n.Tier, &n.Position)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
@@ -109,12 +191,14 @@ func (s *Store) HVNetwork(ctx context.Context) (*model.HVNetwork, error) {
 	wrows, err := pool.Query(ctx, `SELECT w.id, coalesce(w.section_id, 0), w.name, w.rating_a,
 		w.dest_board_id, w.dest_switchboard_id, w.dest_label, w.dest_detail, w.notes, w.position,
 		w.created_at, w.updated_at,
-		coalesce(bo.code, ''), coalesce(b.name, ''), coalesce(sb.name, '')
+		coalesce(bo.code, ''), coalesce(b.name, ''), coalesce(sb.name, ''),
+		coalesce(sb.network_id, 0), coalesce(sbn.name, '')
 		FROM hv_ways w
 		JOIN hv_sections sec ON sec.id = w.section_id
 		LEFT JOIN boards bo ON bo.id = w.dest_board_id
 		LEFT JOIN buildings b ON b.id = bo.building_id
 		LEFT JOIN hv_switchboards sb ON sb.id = w.dest_switchboard_id
+		LEFT JOIN hv_networks sbn ON sbn.id = sb.network_id
 		WHERE sec.network_id = $1 ORDER BY w.position, w.name`, n.ID)
 	if err != nil {
 		return nil, err
@@ -124,7 +208,8 @@ func (s *Store) HVNetwork(ctx context.Context) (*model.HVNetwork, error) {
 		if err := wrows.Scan(&w.ID, &w.SectionID, &w.Name, &w.RatingA,
 			&w.DestBoardID, &w.DestSwitchboardID, &w.DestLabel, &w.DestDetail, &w.Notes, &w.Position,
 			&w.CreatedAt, &w.UpdatedAt,
-			&w.DestBoardCode, &w.DestBuildingName, &w.DestSwitchboardName); err != nil {
+			&w.DestBoardCode, &w.DestBuildingName, &w.DestSwitchboardName,
+			&w.DestNetworkID, &w.DestNetworkName); err != nil {
 			wrows.Close()
 			return nil, err
 		}
@@ -274,17 +359,60 @@ func (s *Store) defaultSwitchboard(ctx context.Context, tx pgx.Tx, networkID int
 }
 
 // UpdateHVNetwork renames the overview.
-func (s *Store) UpdateHVNetwork(ctx context.Context, role string, id int64, name, voltage string) error {
+func (s *Store) UpdateHVNetwork(ctx context.Context, role string, n model.HVNetwork) error {
 	return s.withTx(ctx, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `UPDATE hv_networks SET name = $2, voltage = $3, updated_at = now() WHERE id = $1`,
-			id, name, voltage)
+		tag, err := tx.Exec(ctx, `UPDATE hv_networks SET name = $2, voltage = $3, tier = $4,
+			updated_at = now() WHERE id = $1`, n.ID, n.Name, n.Voltage, n.Tier)
 		if err != nil {
 			return err
 		}
 		if tag.RowsAffected() == 0 {
 			return ErrNotFound
 		}
-		return s.audit(ctx, tx, role, "update", "hv_network", id, "Renamed the distribution overview to "+name)
+		return s.audit(ctx, tx, role, "update", "hv_network", n.ID, "Renamed a drawing to "+n.Name)
+	})
+}
+
+// CreateHVNetwork adds a drawing: the low-tension side of a site, or any other
+// tension worth a picture of its own.
+func (s *Store) CreateHVNetwork(ctx context.Context, role string, n model.HVNetwork) (int64, error) {
+	var id int64
+	err := s.withTx(ctx, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `INSERT INTO hv_networks (name, voltage, tier, position)
+			VALUES ($1, $2, $3, (SELECT coalesce(max(position),-1)+1 FROM hv_networks)) RETURNING id`,
+			n.Name, n.Voltage, n.Tier).Scan(&id); err != nil {
+			return err
+		}
+		return s.audit(ctx, tx, role, "create", "hv_network", id, "Added the drawing "+n.Name)
+	})
+	return id, err
+}
+
+// DeleteHVNetwork removes a drawing, which is refused while anything is still
+// drawn on it so a whole site cannot go in one click.
+func (s *Store) DeleteHVNetwork(ctx context.Context, role string, id int64) error {
+	return s.withTx(ctx, func(tx pgx.Tx) error {
+		var name string
+		var boards, left int
+		if err := tx.QueryRow(ctx, `SELECT n.name,
+			(SELECT count(*) FROM hv_switchboards WHERE network_id = n.id),
+			(SELECT count(*) FROM hv_networks)
+			FROM hv_networks n WHERE n.id = $1`, id).Scan(&name, &boards, &left); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
+		}
+		if left < 2 {
+			return &UserError{"This is the only drawing there is."}
+		}
+		if boards > 0 {
+			return &UserError{"Delete the switchboards on " + name + " first, so nothing is thrown away by mistake."}
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM hv_networks WHERE id = $1`, id); err != nil {
+			return err
+		}
+		return s.audit(ctx, tx, role, "delete", "hv_network", id, "Deleted the drawing "+name)
 	})
 }
 

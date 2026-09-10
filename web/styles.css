@@ -335,6 +335,22 @@ table.grid td.bar-cell .bar { width: 90px; display: inline-block; vertical-align
 .drag-ghost.over { background: var(--primary); }
 .sld-canvas.dropping { cursor: grabbing; }
 rect.drop-hint { fill: rgba(11,116,196,.14); stroke: var(--primary); stroke-width: 2; stroke-dasharray: 5 4; }
+/* The drawings a site is split into: high tension, low tension, and any other
+   picture worth keeping apart. */
+.hv-tiers { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.tier-chip {
+  display: inline-flex; align-items: center; gap: 8px; text-decoration: none;
+  padding: 7px 14px; border-radius: 999px; border: 1px solid var(--border);
+  background: #fff; color: var(--text); font-size: 13px;
+}
+.tier-chip:hover { border-color: var(--primary); }
+.tier-chip.on { background: var(--primary); border-color: var(--primary); color: #fff; }
+.tier-tag {
+  font-size: 10px; font-weight: 700; letter-spacing: .08em; padding: 2px 6px; border-radius: 4px;
+  background: var(--bg); color: var(--muted);
+}
+.tier-chip.on .tier-tag { background: rgba(255,255,255,.22); color: #fff; }
+
 .hv-grab { cursor: grab; }
 .sld-canvas.dropping .hv-grab { cursor: grabbing; }
 

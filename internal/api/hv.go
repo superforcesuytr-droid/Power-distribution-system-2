@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/superforcesuytr-droid/power-distribution-system/internal/db"
@@ -14,6 +15,10 @@ import (
 func (s *Server) routesHV(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/hv", s.handleHVGet)
 	mux.HandleFunc("PUT /api/hv", s.requireRole(model.RoleSupervisor, s.handleHVUpdate))
+	mux.HandleFunc("GET /api/hv/networks", s.handleHVNetworks)
+	mux.HandleFunc("GET /api/hv/switchboards", s.handleHVBoardList)
+	mux.HandleFunc("POST /api/hv/networks", s.requireRole(model.RoleSupervisor, s.handleHVNetworkCreate))
+	mux.HandleFunc("DELETE /api/hv/networks/{id}", s.requireRole(model.RoleSupervisor, s.handleHVNetworkDelete))
 
 	mux.HandleFunc("POST /api/hv/switchboards", s.requireRole(model.RoleSupervisor, s.handleHVBoardCreate))
 	mux.HandleFunc("PUT /api/hv/switchboards/{id}", s.requireRole(model.RoleSupervisor, s.handleHVBoardUpdate))
@@ -46,8 +51,18 @@ func (s *Server) routesHV(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/hv/couplers/{id}", s.requireRole(model.RoleSupervisor, s.handleHVCouplerDelete))
 }
 
+// queryID reads a numeric query parameter, which is how a request says which
+// drawing it means. Zero means the first one.
+func queryID(r *http.Request, name string) int64 {
+	v, err := strconv.ParseInt(strings.TrimSpace(r.URL.Query().Get(name)), 10, 64)
+	if err != nil || v < 0 {
+		return 0
+	}
+	return v
+}
+
 func (s *Server) handleHVGet(w http.ResponseWriter, r *http.Request) {
-	n, err := s.Store.HVNetwork(ctx(r))
+	n, err := s.Store.HVNetwork(ctx(r), queryID(r, "network"))
 	if err != nil {
 		fail(w, err)
 		return
@@ -55,9 +70,39 @@ func (s *Server) handleHVGet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, n)
 }
 
+// handleHVNetworks lists the drawings for the picker above the diagram.
+func (s *Server) handleHVNetworks(w http.ResponseWriter, r *http.Request) {
+	list, err := s.Store.HVNetworks(ctx(r))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, list)
+}
+
 type hvNetworkInput struct {
 	Name    string `json:"name"`
 	Voltage string `json:"voltage"`
+	Tier    string `json:"tier"`
+}
+
+func (in hvNetworkInput) toModel(id int64) (model.HVNetwork, error) {
+	n := model.HVNetwork{
+		ID:      id,
+		Name:    strings.TrimSpace(in.Name),
+		Voltage: strings.TrimSpace(in.Voltage),
+		Tier:    strings.TrimSpace(in.Tier),
+	}
+	if err := required("Name", n.Name); err != nil {
+		return n, err
+	}
+	if n.Tier == "" {
+		n.Tier = model.TierLT
+	}
+	if !model.ValidTier(n.Tier) {
+		return n, &db.UserError{Msg: "A drawing is either the high-tension or the low-tension side."}
+	}
+	return n, nil
 }
 
 func (s *Server) handleHVUpdate(w http.ResponseWriter, r *http.Request) {
@@ -66,20 +111,55 @@ func (s *Server) handleHVUpdate(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	if err := required("Name", in.Name); err != nil {
-		fail(w, err)
-		return
-	}
-	n, err := s.Store.HVNetwork(ctx(r))
+	cur, err := s.Store.HVNetwork(ctx(r), queryID(r, "network"))
 	if err != nil {
 		fail(w, err)
 		return
 	}
-	voltage := strings.TrimSpace(in.Voltage)
-	if voltage == "" {
-		voltage = n.Voltage
+	if in.Tier == "" {
+		in.Tier = cur.Tier
 	}
-	if err := s.Store.UpdateHVNetwork(ctx(r), roleOf(r), n.ID, strings.TrimSpace(in.Name), voltage); err != nil {
+	n, err := in.toModel(cur.ID)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if n.Voltage == "" {
+		n.Voltage = cur.Voltage
+	}
+	if err := s.Store.UpdateHVNetwork(ctx(r), roleOf(r), n); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+func (s *Server) handleHVNetworkCreate(w http.ResponseWriter, r *http.Request) {
+	var in hvNetworkInput
+	if err := decode(r, &in); err != nil {
+		fail(w, err)
+		return
+	}
+	n, err := in.toModel(0)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	id, err := s.Store.CreateHVNetwork(ctx(r), roleOf(r), n)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 201, map[string]int64{"id": id})
+}
+
+func (s *Server) handleHVNetworkDelete(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if err := s.Store.DeleteHVNetwork(ctx(r), roleOf(r), id); err != nil {
 		fail(w, err)
 		return
 	}
@@ -126,13 +206,28 @@ func (in hvFeederInput) toModel(id, networkID int64, defVoltage string) (model.H
 	return f, nil
 }
 
+// networkFor says which drawing a new feeder, way, coupler or section belongs
+// on: the one its bus section is already on, falling back to the drawing named
+// in the query, and then to the first there is.
+func (s *Server) networkFor(r *http.Request, sectionID int64) (*model.HVNetwork, error) {
+	id := queryID(r, "network")
+	if sectionID > 0 {
+		on, err := s.Store.NetworkOfSection(ctx(r), sectionID)
+		if err != nil {
+			return nil, err
+		}
+		id = on
+	}
+	return s.Store.HVNetwork(ctx(r), id)
+}
+
 func (s *Server) handleHVFeederCreate(w http.ResponseWriter, r *http.Request) {
 	var in hvFeederInput
 	if err := decode(r, &in); err != nil {
 		fail(w, err)
 		return
 	}
-	n, err := s.Store.HVNetwork(ctx(r))
+	n, err := s.networkFor(r, in.SectionID)
 	if err != nil {
 		fail(w, err)
 		return
@@ -298,7 +393,7 @@ func (s *Server) handleHVWayCreate(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	n, err := s.Store.HVNetwork(ctx(r))
+	n, err := s.networkFor(r, in.SectionID)
 	if err != nil {
 		fail(w, err)
 		return
@@ -370,14 +465,14 @@ func (s *Server) couplerModel(r *http.Request, in hvCouplerInput, id int64) (mod
 	if err := required("Coupler name", c.Name); err != nil {
 		return c, err
 	}
-	n, err := s.Store.HVNetwork(ctx(r))
+	if in.AfterID <= 0 {
+		return c, &db.UserError{Msg: "Choose where on the busbar the coupler sits."}
+	}
+	n, err := s.networkFor(r, in.AfterID)
 	if err != nil {
 		return c, err
 	}
 	c.NetworkID = n.ID
-	if in.AfterID <= 0 {
-		return c, &db.UserError{Msg: "Choose where on the busbar the coupler sits."}
-	}
 	// A coupler ties two sections of the same switchboard, so the section on
 	// its right is the next one along that board's own bus.
 	for _, board := range n.Switchboards {
@@ -653,13 +748,24 @@ func (in hvBoardInput) toModel(id, networkID int64) (model.HVSwitchboard, error)
 	return b, nil
 }
 
+// handleHVBoardList names every switchboard on the site, whichever drawing it
+// is on, so a way can be pointed at one across drawings.
+func (s *Server) handleHVBoardList(w http.ResponseWriter, r *http.Request) {
+	list, err := s.Store.HVSwitchboardList(ctx(r))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, list)
+}
+
 func (s *Server) handleHVBoardCreate(w http.ResponseWriter, r *http.Request) {
 	var in hvBoardInput
 	if err := decode(r, &in); err != nil {
 		fail(w, err)
 		return
 	}
-	n, err := s.Store.HVNetwork(ctx(r))
+	n, err := s.Store.HVNetwork(ctx(r), queryID(r, "network"))
 	if err != nil {
 		fail(w, err)
 		return
@@ -755,7 +861,15 @@ func (s *Server) handleHVSectionCreate(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	n, err := s.Store.HVNetwork(ctx(r))
+	on := queryID(r, "network")
+	if in.SwitchboardID > 0 {
+		var err error
+		if on, err = s.Store.NetworkOfSwitchboard(ctx(r), in.SwitchboardID); err != nil {
+			fail(w, err)
+			return
+		}
+	}
+	n, err := s.Store.HVNetwork(ctx(r), on)
 	if err != nil {
 		fail(w, err)
 		return

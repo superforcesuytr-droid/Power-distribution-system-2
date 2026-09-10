@@ -90,6 +90,8 @@
     (query || '').split('&').filter(Boolean).forEach(kv => { const [k, v] = kv.split('='); params[decodeURIComponent(k)] = decodeURIComponent(v || ''); });
     const view = parts[0] || 'dashboard';
     if (parts[1] === 'board' && parts[2]) params.board = Number(parts[2]);
+    // #/hv/<id> picks which drawing to show.
+    if (view === 'hv' && parts[1] && parts[1] !== 'board') params.network = Number(parts[1]) || 0;
     return { view, params };
   }
   function navigate(hash) { if (location.hash === hash) render(); else location.hash = hash; }
@@ -115,7 +117,7 @@
     try {
       switch (view) {
         case 'explorer': await renderExplorer(); break;
-        case 'hv': await renderHV(); break;
+        case 'hv': await renderHV(params.network || 0); break;
         case 'sld': await renderSLD(); break;
         case 'activity': await renderActivity(); break;
         default: await renderDashboard();
@@ -820,10 +822,17 @@
   const HEAD_KINDS = { switchgear: 'Switchgear', isolator: 'Switch' };
   const isHead = d => !!d && (d.kind === 'switchgear' || d.kind === 'isolator');
 
-  async function renderHV() {
-    const [net, boards] = await Promise.all([api('GET', '/api/hv'), api('GET', '/api/boards')]);
+  async function renderHV(networkId) {
+    const [net, boards, nets, sbs] = await Promise.all([
+      api('GET', '/api/hv' + (networkId ? '?network=' + networkId : '')),
+      api('GET', '/api/boards'),
+      api('GET', '/api/hv/networks'),
+      api('GET', '/api/hv/switchboards'),
+    ]);
     state.hv = net;
     state.hvBoards = boards;
+    state.hvNets = nets;
+    state.hvAllBoards = sbs;
     setActiveTab('hv');
     app.innerHTML = `
       <div class="page">
@@ -844,7 +853,12 @@
             <div><div class="n">${net.linked_count}</div><div class="l">Linked</div></div>
           </div>
         </div>
-        ${canEdit() ? `<p class="sld-hint">Click a destination box to open that board. <b>+ Way</b> taps a bus section, which every feeder on it backs. On a way, <b>+</b> fits a device below and clicking one changes or removes it. To rearrange a bar, take a way or feeder by its dot on the busbar and slide it left or right. A way can feed a switchboard drawn below instead of a destination box.</p>` : ''}
+        ${canEdit() ? `<p class="sld-hint">Click a destination box to open that board. <b>+ Way</b> taps a bus section, which every feeder on it backs. On a way, <b>+</b> fits a device below and clicking one changes or removes it. To rearrange a bar, take a way or feeder by its dot on the busbar and slide it left or right. A way can feed a switchboard drawn below, or one on another drawing, instead of a destination box.</p>` : ''}
+        ${nets.length > 1 || canManage() ? `<div class="hv-tiers">
+          ${nets.map(x => `<a class="tier-chip${x.id === net.id ? ' on' : ''}" href="#/hv/${x.id}">
+            <b>${esc(x.name)}</b>${x.tier ? `<span class="tier-tag">${x.tier === 'ht' ? 'HT' : 'LT'}</span>` : ''}</a>`).join('')}
+          ${canManage() ? '<button class="btn btn-sm" data-action="hv-add-network">+ Add drawing</button>' : ''}
+        </div>` : ''}
         <div class="hv-toolbar">
           ${canManage() ? '<button class="btn btn-primary" data-action="hv-add-board">+ Add switchboard</button>' : ''}
           ${canManage() ? '<button class="btn" data-action="hv-add-section">+ Add bus section</button>' : ''}
@@ -858,7 +872,7 @@
         ${net.section_count ? zoomBar() : ''}
         <div class="sld-canvas" id="diagram-canvas">${net.section_count ? hvSVG(net) : '<div class="empty"><h2>Nothing on the busbar yet</h2><p>Add a switchboard, then the feeders backing it and the ways tapping it.</p></div>'}</div>
       </div>`;
-    mountZoom('hv');
+    mountZoom('hv-' + net.id);
     hvMountDrag();
     applyFocus();
   }
@@ -1218,7 +1232,7 @@
             + [board.current_a != null ? fmtA(board.current_a) + 'A' : '',
               board.fault_ka != null ? fmtA(board.fault_ka) + 'kA' : ''].filter(Boolean).join('/')
           : '');
-      out.push(`<g class="${canManage() ? 'hv-node' : ''}" ${canManage() ? `data-action="hv-edit-board" data-id="${board.id}"` : ''}>
+      out.push(`<g id="hv-board-${board.id}" class="${canManage() ? 'hv-node' : ''}" ${canManage() ? `data-action="hv-edit-board" data-id="${board.id}"` : ''}>
         <title>${esc(board.name)}${rating ? ' · ' + esc(rating) : ''}${canManage() ? ' - click to change its rating' : ''}</title>
         <rect x="${g.busL}" y="${busY - 62}" width="300" height="40" fill="transparent"/>
         <text x="${g.busL + 2}" y="${busY - 44}" font-size="15" font-weight="700" fill="${C.bus}">${esc(board.name)}</text>
@@ -1307,8 +1321,11 @@
           const wGrab = canEdit() ? ` data-drag="way" data-drag-id="${way.id}" data-drag-label="${esc(way.name)}"` : '';
           // Where the conductor ends: a switchboard below takes it on down to
           // its own bus, otherwise it stops at the destination box.
+          // A board on this drawing is run down to; one on another drawing has
+          // no line to draw, so the destination box links across to it instead.
           const down = way.dest_switchboard_id ? boardAt[way.dest_switchboard_id] : null;
           const feedsDown = !!(down && down.i > g.i);
+          const across = !down && !!way.dest_switchboard_id && !!way.dest_network_id;
           // Where each device on the chain sits, worked out before anything is
           // drawn so the conductor knows where to stop.
           const head = way.devices[0];
@@ -1365,16 +1382,18 @@
             </g>`);
           } else {
             // The destination box: what this way actually feeds.
-            const linked = !!way.dest_board_id;
+            const linked = !!way.dest_board_id || across;
             const dcol = linked ? C.dest : C.muted;
-            const label = way.dest_label || way.dest_board_code || 'Not assigned';
-            const sub = way.dest_detail
-              || (linked ? (way.dest_building_name || 'Open on the dashboard')
-                : (way.dest_label ? 'External' : 'Set a destination'));
-            const destAct = linked ? `data-action="hv-open-dest" data-id="${way.dest_board_id}"`
-              : (canEdit() ? `data-action="hv-edit-way" data-id="${way.id}"` : '');
+            const label = across ? way.dest_switchboard_name : (way.dest_label || way.dest_board_code || 'Not assigned');
+            const sub = across ? (way.dest_detail || way.dest_network_name)
+              : (way.dest_detail
+                || (linked ? (way.dest_building_name || 'Open on the dashboard')
+                  : (way.dest_label ? 'External' : 'Set a destination')));
+            const destAct = across ? `data-action="hv-open-drawing" data-id="${way.dest_network_id}" data-board="${way.dest_switchboard_id}"`
+              : (way.dest_board_id ? `data-action="hv-open-dest" data-id="${way.dest_board_id}"`
+                : (canEdit() ? `data-action="hv-edit-way" data-id="${way.id}"` : ''));
             out.push(`<g class="${destAct ? 'hv-node ' : ''}${linked ? 'hv-linked' : ''}" id="hv-way-${way.id}" ${destAct}${wGrab}>
-              <title>${esc(label)}${way.dest_detail ? ' · ' + esc(way.dest_detail) : ''}${linked ? ' - click to open this board' : (destAct ? ' - click to set where this way feeds' : '')}</title>
+              <title>${esc(label)}${way.dest_detail ? ' · ' + esc(way.dest_detail) : ''}${across ? ' on ' + esc(way.dest_network_name) + ' - click to open that drawing' : (linked ? ' - click to open this board' : (destAct ? ' - click to set where this way feeds' : ''))}</title>
               <rect x="${wx - WAY_W / 2 + 6}" y="${destY}" width="${WAY_W - 12}" height="${DEST_H}" rx="9"
                     fill="${linked ? '#f2fbf6' : '#f8fafc'}" stroke="${dcol}" stroke-width="2.5"/>
               <text x="${wx}" y="${destY + 25}" text-anchor="middle" font-size="15" font-weight="700" fill="${linked ? '#0f8a4f' : '#64748b'}">${esc(label)}</text>
@@ -1756,13 +1775,7 @@
   function findMCB(id) { for (const m of state.board ? state.board.mccbs : []) { const x = m.mcbs.find(mb => mb.id === id); if (x) return x; } return null; }
 
   // ---- high-voltage overview
-  function hvRenameForm() {
-    const net = state.hv;
-    formModal('Rename the overview', `
-      ${field('Title', 'name', net.name, { required: true, full: true })}
-      ${field('Voltage', 'voltage', net.voltage, { placeholder: '22kV' })}`,
-      async d => { await api('PUT', '/api/hv', { name: d.name, voltage: d.voltage }); await afterChange('Overview renamed'); });
-  }
+  function hvRenameForm() { hvNetworkForm(state.hv); }
 
   function hvFeederForm(f, sectionId) {
     const isEdit = !!(f && f.id);
@@ -1797,10 +1810,13 @@
     const secs = hvSections();
     const boards = state.hvBoards || [];
     const parent = secs.find(x => x.id === (isEdit ? way.section_id : Number(sectionId))) || secs[0];
-    // A way can only land on a switchboard drawn below its own, or the drawing
-    // would have to run back up the page.
+    // On this drawing a way can only land on a switchboard below its own, or
+    // the line would have to run back up the page. On another drawing there is
+    // no line to draw, so any board there can be named.
     const own = parent ? hvBoardOfSection(parent.id) : null;
-    const below = hvBoards().filter(b => !own || b.position > own.position);
+    const here = (state.hv || {}).id;
+    const below = (state.hvAllBoards || []).filter(b =>
+      b.network_id !== here || !own || b.position > own.position);
     formModal(isEdit ? 'Edit way ' + way.name : 'Add way to ' + (parent ? parent.name : 'the busbar'), `
       ${field('Taps bus section', 'section_id', parent ? parent.id : '', { type: 'select', required: true, full: true,
         options: secs.map(x => ({ value: x.id, label: hvSectionLabel(x) + (x.feeders.length ? ' · backed by ' + x.feeders.map(y => y.name).join(', ') : ' · no feeder yet') })),
@@ -1813,8 +1829,11 @@
       ${isEdit ? '' : field('Runs into chiller', 'chiller', '', { placeholder: 'e.g. CH#1',
         hint: 'Name one and the way runs from its switch straight into the machine, with no destination box.', attrs: 'style="text-transform:uppercase"' })}
       ${field('Feeds switchboard', 'dest_switchboard_id', isEdit && way.dest_switchboard_id ? way.dest_switchboard_id : '', { type: 'select', full: true,
-        options: [{ value: '', label: '— does not feed a switchboard —' }].concat(below.map(b => ({ value: b.id, label: b.name + (b.voltage ? ' · ' + b.voltage : '') }))),
-        hint: 'The way runs on down to that board\'s busbar, the way a transformer feeds the next voltage down.' })}
+        options: [{ value: '', label: '— does not feed a switchboard —' }].concat(below.map(b => ({
+          value: b.id,
+          label: (b.network_id === here ? '' : b.network_name + ' · ') + b.name + (b.voltage ? ' · ' + b.voltage : ''),
+        }))),
+        hint: 'On this drawing the way runs on down to that board\'s busbar. On another drawing the destination box links across to it.' })}
       ${field('Or feeds board', 'dest_board_id', isEdit && way.dest_board_id ? way.dest_board_id : '', { type: 'select', full: true,
         options: [{ value: '', label: '— not a board in this system —' }].concat(boards.map(b => ({ value: b.id, label: b.code + ' · ' + b.building_name }))),
         hint: 'Linking a board makes the destination box clickable.' })}
@@ -1953,6 +1972,40 @@
       async () => { await api('DELETE', '/api/hv/couplers/' + c.id); await afterChange('Coupler deleted'); });
   }
 
+  // ---- drawings
+  function hvNetworkForm(net) {
+    const isEdit = !!(net && net.id);
+    formModal(isEdit ? 'Rename ' + net.name : 'Add a drawing', `
+      ${field('Title', 'name', isEdit ? net.name : '', { required: true, full: true, placeholder: 'e.g. SSMC Low Tension Distribution' })}
+      ${field('Tension', 'tier', isEdit ? (net.tier || 'lt') : 'lt', { type: 'select', required: true,
+        options: [{ value: 'ht', label: 'High tension' }, { value: 'lt', label: 'Low tension' }] })}
+      ${field('Voltage', 'voltage', isEdit ? net.voltage : '400V', { placeholder: '400V' })}
+      <p class="field full hint" style="margin:0">A drawing of its own, with its own switchboards. A way on another drawing can land on a switchboard here, and its destination box will link across.</p>`,
+      async d => {
+        const body = { name: d.name, voltage: d.voltage, tier: d.tier };
+        if (isEdit) { await api('PUT', '/api/hv?network=' + net.id, body); await afterChange('Drawing renamed'); }
+        else {
+          const r = await api('POST', '/api/hv/networks', body);
+          navigate('#/hv/' + r.id);
+          toast('Drawing added');
+        }
+      },
+      isEdit && canManage() && (state.hvNets || []).length > 1
+        ? { wide: true, deleteLabel: 'Delete drawing', onDelete: () => hvDeleteNetwork(net) } : { wide: true });
+  }
+  function hvDeleteNetwork(net) {
+    if ((net.board_count || (net.switchboards || []).length) > 0) {
+      toast('Delete the switchboards on ' + net.name + ' first.', 'error');
+      return;
+    }
+    confirmModal('Delete drawing', `Delete <b>${esc(net.name)}</b>?`,
+      async () => {
+        await api('DELETE', '/api/hv/networks/' + net.id);
+        navigate('#/hv');
+        toast('Drawing deleted');
+      });
+  }
+
   const hvBoards = () => (state.hv && state.hv.switchboards) || [];
   const hvSections = () => hvBoards().flatMap(b => b.sections);
   const hvFeeders = () => hvSections().flatMap(sec => sec.feeders);
@@ -1984,7 +2037,7 @@
           current_a: d.current_a === '' ? null : Number(d.current_a),
           fault_ka: d.fault_ka === '' ? null : Number(d.fault_ka) };
         if (isEdit) { await api('PUT', '/api/hv/switchboards/' + board.id, body); await afterChange('Switchboard updated'); }
-        else { await api('POST', '/api/hv/switchboards', body); await afterChange('Switchboard added'); }
+        else { await api('POST', '/api/hv/switchboards?network=' + ((state.hv || {}).id || 0), body); await afterChange('Switchboard added'); }
       },
       isEdit && canManage() ? { wide: true, deleteLabel: 'Delete switchboard', onDelete: () => hvDeleteBoard(board) } : { wide: true });
   }
@@ -2188,6 +2241,7 @@
       case 'delete-circuit': deleteCircuit(findCircuit(id)); break;
       case 'hv-rename': hvRenameForm(); break;
       case 'hv-add-section': hvSectionForm(null); break;
+      case 'hv-add-network': if (canManage()) hvNetworkForm(null); break;
       case 'hv-add-board': if (canManage()) hvBoardForm(null); break;
       case 'hv-edit-board': if (canManage()) hvBoardForm(hvFindBoard(id)); break;
       case 'hv-edit-section': if (canManage()) hvSectionForm(hvFindSection(id)); break;
@@ -2200,6 +2254,8 @@
       case 'hv-add-coupler': hvCouplerForm(null); break;
       case 'hv-edit-coupler': if (canManage()) hvCouplerForm(hvFindCoupler(id)); break;
       case 'hv-open-dest': navigate(boardHash('dashboard', id)); break;
+      // Across to another drawing, landing on the switchboard the way feeds.
+      case 'hv-open-drawing': navigate('#/hv/' + id + (el.dataset.board ? '?focus=hv-board-' + el.dataset.board : '')); break;
       case 'refresh': render(); break;
     }
   });
