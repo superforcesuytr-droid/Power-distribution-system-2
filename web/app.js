@@ -948,7 +948,20 @@
     // Where a column would land: anywhere along the bus section under the
     // pointer, on a light grid so columns still line up with one another.
     const GRID = 6;
-    const slotAt = (cx, cy, kind) => {
+    // Where a dot may not go: within touching distance of one already on that
+    // length of bar. The nearest free place on either side is taken instead, so
+    // a column dropped on top of another lands beside it rather than under it.
+    const clearOf = (x, taken, lo, hi) => {
+      const min = (hvLayout && hvLayout.minDot) || 26;
+      const free = v => v >= lo - 0.5 && v <= hi + 0.5 && !taken.some(t => Math.abs(t - v) < min);
+      if (free(x)) return x;
+      for (let step = GRID; step <= (hi - lo) + min; step += GRID) {
+        if (free(x - step)) return x - step;
+        if (free(x + step)) return x + step;
+      }
+      return x;
+    };
+    const slotAt = (cx, cy, kind, id) => {
       const p = toSvg(cx, cy);
       if (!p || !hvLayout) return null;
       let best = null, bestGap = Infinity;
@@ -960,7 +973,10 @@
       });
       if (!best || bestGap > 140) return null;
       const from = best.secLeft + Math.round((p.x - best.secLeft) / GRID) * GRID;
-      const x = Math.min(best.secLeft + best.secWidth, Math.max(best.secLeft, from));
+      const near = Math.min(best.secLeft + best.secWidth, Math.max(best.secLeft, from));
+      const taken = ((hvLayout.dots || {})[best.sectionId] || [])
+        .filter(d => !(d.kind === kind && d.id === id)).map(d => d.x);
+      const x = clearOf(near, taken, best.secLeft, best.secLeft + best.secWidth);
       return {
         sectionId: best.sectionId, name: best.name, x,
         offset: (x - best.secLeft) / best.secWidth,
@@ -1014,7 +1030,7 @@
         drag.ghost.style.left = e.clientX + 14 + 'px';
         drag.ghost.style.top = e.clientY + 14 + 'px';
       }
-      const z = drag.column ? slotAt(e.clientX, e.clientY, drag.column) : zoneAt(e.clientX, e.clientY);
+      const z = drag.column ? slotAt(e.clientX, e.clientY, drag.column, drag.id) : zoneAt(e.clientX, e.clientY);
       drag.zone = z;
       if (drag.column) {
         // A guide down the bar at the place it will land.
@@ -1147,6 +1163,8 @@
     // The step between one sideways run into a box and the next, and how many
     // such steps a board keeps room for above its boxes.
     const ROUTE_ROW = 18, STEP_ROWS = 3;
+    // How close two dots on the busbar may come before they read as one.
+    const MIN_DOT = 26;
     // Room enough that a symbol and its rotated designation never crowd the
     // next one down the conductor.
     const devHeight = d => (d.kind === 'transformer' ? 84 : (d.kind === 'chiller' ? 88 : 58));
@@ -1459,6 +1477,25 @@
         sg.sec.ways.forEach(w => { if (w.offset_x != null) at.set(key('way', w.id), placed(w)); });
         sg.feederX = sg.sec.feeders.map(f => at.get(key('feeder', f.id)));
         sg.wayX = sg.sec.ways.map(w => at.get(key('way', w.id)));
+        // A dot on the bar is where one thing lands on it, and two of them
+        // touching reads as one. The ways keep the even spacing of their run;
+        // an incomer that would land on a dot already there steps clear of it.
+        const dotsHere = sg.wayX.filter(x => x != null);
+        sg.feederX = sg.feederX.map(x => {
+          if (x == null) return x;
+          for (let n = 0; n < 24; n++) {
+            const hit = dotsHere.find(t => Math.abs(t - x) < MIN_DOT);
+            if (hit === undefined) break;
+            x = hit + (x < hit ? -MIN_DOT : MIN_DOT);
+          }
+          dotsHere.push(x);
+          return x;
+        });
+        // Every dot on this length of bar, so a column dragged along it can be
+        // dropped clear of the ones already there.
+        sg.dots = sg.sec.feeders.map((f, i) => ({ kind: 'feeder', id: f.id, x: sg.feederX[i] }))
+          .concat(sg.sec.ways.map((w, i) => ({ kind: 'way', id: w.id, x: sg.wayX[i] })))
+          .filter(d => d.x != null);
         x += sg.width + SECTION_GAP;
       });
     });
@@ -1486,15 +1523,18 @@
     // run per kind, and per side where a bar is fed from both ends. Every run
     // carries its own band, because the boards are stacked and a point on the
     // page belongs to one board's ways or another's incomers.
-    hvLayout = { groups: [] };
-    boards.forEach(g => g.secs.forEach(sg => sg.groups.forEach(run => {
-      hvLayout.groups.push({
-        ...run, sectionId: sg.sec.id, name: sg.sec.name,
-        secLeft: sg.left, secWidth: sg.width,
-        top: run.band === 'below' ? g.busY - 20 : g.feederY - 46,
-        bottom: run.band === 'below' ? g.bottom + 20 : g.busY + 20,
+    hvLayout = { groups: [], dots: {}, minDot: MIN_DOT };
+    boards.forEach(g => g.secs.forEach(sg => {
+      hvLayout.dots[sg.sec.id] = sg.dots;
+      sg.groups.forEach(run => {
+        hvLayout.groups.push({
+          ...run, sectionId: sg.sec.id, name: sg.sec.name,
+          secLeft: sg.left, secWidth: sg.width,
+          top: run.band === 'below' ? g.busY - 20 : g.feederY - 46,
+          bottom: run.band === 'below' ? g.bottom + 20 : g.busY + 20,
+        });
       });
-    })));
+    }));
 
     const out = [];
     // Which way each incomer on this drawing taps, and where every way ended
