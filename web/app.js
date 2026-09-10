@@ -1158,19 +1158,21 @@
     const boards = (net.switchboards || []).map(board => {
       const secs = board.sections.map(planSection);
       const contentW = secs.reduce((s, g) => s + g.width, 0) + Math.max(0, secs.length - 1) * SECTION_GAP;
-      let feederChain = 0, wayChain = 0, routeRows = 0;
+      // Ways that name the same destination share a box and are run into it
+      // sideways, and each of those runs needs a level of its own above the
+      // boxes so no two lie on top of one another. They are counted across the
+      // whole board, because a board fed from both ends can have the two
+      // supplies on different lengths of its bar.
+      const seen = {};
+      board.sections.forEach(sec => sec.ways.forEach(w => {
+        const k = w.dest_switchboard_id ? 'sb:' + w.dest_switchboard_id
+          : (w.dest_board_id ? 'bd:' + w.dest_board_id
+            : ((w.dest_label || '').trim().toUpperCase() ? 'la:' + (w.dest_label || '').trim().toUpperCase() : ''));
+        if (k) seen[k] = (seen[k] || 0) + 1;
+      }));
+      const routeRows = Object.values(seen).reduce((t, n) => t + (n > 1 ? n : 0), 0);
+      let feederChain = 0, wayChain = 0;
       board.sections.forEach(sec => {
-        // Ways that name the same destination share a box and are run into it
-        // sideways, and each of those runs needs a level of its own above the
-        // boxes so no two lie on top of one another.
-        const seen = {};
-        sec.ways.forEach(w => {
-          const k = w.dest_switchboard_id ? 'sb:' + w.dest_switchboard_id
-            : (w.dest_board_id ? 'bd:' + w.dest_board_id
-              : ((w.dest_label || '').trim().toUpperCase() ? 'la:' + (w.dest_label || '').trim().toUpperCase() : ''));
-          if (k) seen[k] = (seen[k] || 0) + 1;
-        });
-        routeRows = Math.max(routeRows, Object.values(seen).reduce((t, n) => t + (n > 1 ? n : 0), 0));
         // An incomer is drawn from its first symbol down, so the room it needs
         // below that symbol is every symbol on it but the last.
         sec.feeders.forEach(f => {
@@ -1280,6 +1282,77 @@
       const secAt = {};
       g.secs.forEach((sg, i) => { secAt[sg.sec.id] = { ...sg, i }; });
 
+      // Worked out before anything on this board is drawn: where each way's
+      // chain of symbols sits, where its conductor ends, and which ways feed
+      // the same thing. A board fed from both ends of the bar has a supply
+      // from each - and they can be on different lengths of the bar - so the
+      // ways are gathered across the whole board rather than one section at a
+      // time, and a drawing runs all of them into one box.
+      const planOf = {};
+      const allPlans = [];
+      g.secs.forEach(sg => sg.sec.ways.forEach((way, i) => {
+        const down = way.dest_switchboard_id ? boardAt[way.dest_switchboard_id] : null;
+        const feedsDown = !!(down && down.i > g.i);
+        const across = !down && !!way.dest_switchboard_id && !!way.dest_network_id;
+        const head = way.devices[0];
+        const headIsSwitch = isHead(head);
+        const chain = [];
+        let cy = wayTapY + DEV_GAP;
+        way.devices.forEach((dev, di) => {
+          if (di === 0 && headIsSwitch) return;
+          chain.push({ dev, y: cy });
+          cy += devHeight(dev);
+        });
+        const tail = chain.length ? chain[chain.length - 1] : null;
+        const endsAtLoad = !feedsDown && !!tail && tail.dev.kind === 'chiller';
+        const pl = { way, i, wx: sg.wayX[i], down, feedsDown, across, head, headIsSwitch, chain, cy, tail, endsAtLoad };
+        planOf[way.id] = pl;
+        allPlans.push(pl);
+      }));
+      // Two ways that name the same destination land in the same box.
+      const destKey = w => (w.dest_switchboard_id ? 'sb:' + w.dest_switchboard_id
+        : (w.dest_board_id ? 'bd:' + w.dest_board_id
+          : ((w.dest_label || '').trim().toUpperCase() ? 'la:' + (w.dest_label || '').trim().toUpperCase() : '')));
+      const boxes = [];
+      const boxByKey = {};
+      allPlans.forEach(pl => {
+        if (pl.feedsDown || pl.endsAtLoad) return;
+        const key = destKey(pl.way);
+        let box = key ? boxByKey[key] : null;
+        if (!box) {
+          box = { members: [], w: WAY_W - 12 };
+          boxes.push(box);
+          if (key) boxByKey[key] = box;
+        }
+        pl.box = box;
+        pl.feed = box.members.length;
+        box.members.push(pl);
+      });
+      // Centre each box under the ways feeding it, then hold the boxes apart
+      // so two of them can never sit on top of one another.
+      boxes.forEach(box => {
+        box.cx = box.members.reduce((t, m) => t + m.wx, 0) / box.members.length;
+        box.w = WAY_W - 12 + (box.members.length - 1) * 24;
+      });
+      boxes.sort((a, b) => a.cx - b.cx);
+      let edge = -Infinity;
+      boxes.forEach(box => {
+        if (box.cx - box.w / 2 < edge) box.cx = edge + box.w / 2;
+        edge = box.cx + box.w / 2 + 14;
+      });
+      // Where each supply enters the top of its box, and which level its run
+      // takes to get there. Levels run across the whole board, longest run
+      // highest, so the runs nest and never share a line.
+      const routed = [];
+      boxes.forEach(box => box.members.forEach((m, k) => {
+        m.enterX = box.members.length > 1
+          ? box.cx - box.w / 2 + box.w * (k + 1) / (box.members.length + 1)
+          : m.wx;
+        if (box.members.length > 1) routed.push(m);
+      }));
+      routed.sort((a, b) => Math.abs(b.wx - b.enterX) - Math.abs(a.wx - a.enterX));
+      routed.forEach((m, k) => { m.level = k; });
+
       // The switchboard itself: what it is and what it is rated at.
       const rating = [board.phases, board.frequency].filter(Boolean).join(', ')
         + (board.current_a != null || board.fault_ka != null
@@ -1372,72 +1445,7 @@
         if (!nw) {
           out.push(`<text x="${sg.cx}" y="${busY + 46}" text-anchor="middle" font-size="12" fill="${C.muted}">No outgoing ways on this section yet</text>`);
         }
-        // Worked out before anything is drawn: where each way's chain of
-        // symbols sits, where its conductor ends, and which ways feed the same
-        // thing. A board fed from both ends of the bar has a supply from each,
-        // and a drawing runs both of them into one box.
-        const plans = sec.ways.map((way, i) => {
-          const down = way.dest_switchboard_id ? boardAt[way.dest_switchboard_id] : null;
-          const feedsDown = !!(down && down.i > g.i);
-          const across = !down && !!way.dest_switchboard_id && !!way.dest_network_id;
-          const head = way.devices[0];
-          const headIsSwitch = isHead(head);
-          const chain = [];
-          let cy = wayTapY + DEV_GAP;
-          way.devices.forEach((dev, di) => {
-            if (di === 0 && headIsSwitch) return;
-            chain.push({ dev, y: cy });
-            cy += devHeight(dev);
-          });
-          const tail = chain.length ? chain[chain.length - 1] : null;
-          const endsAtLoad = !feedsDown && !!tail && tail.dev.kind === 'chiller';
-          return { way, i, wx: sg.wayX[i], down, feedsDown, across, head, headIsSwitch, chain, cy, tail, endsAtLoad };
-        });
-        // Two ways that name the same destination land in the same box.
-        const destKey = w => (w.dest_switchboard_id ? 'sb:' + w.dest_switchboard_id
-          : (w.dest_board_id ? 'bd:' + w.dest_board_id
-            : ((w.dest_label || '').trim().toUpperCase() ? 'la:' + (w.dest_label || '').trim().toUpperCase() : '')));
-        const boxes = [];
-        const boxByKey = {};
-        plans.forEach(pl => {
-          if (pl.feedsDown || pl.endsAtLoad) return;
-          const key = destKey(pl.way);
-          let box = key ? boxByKey[key] : null;
-          if (!box) {
-            box = { members: [], w: WAY_W - 12 };
-            boxes.push(box);
-            if (key) boxByKey[key] = box;
-          }
-          pl.box = box;
-          pl.feed = box.members.length;
-          box.members.push(pl);
-        });
-        // Centre each box under the ways feeding it, then hold the boxes apart
-        // so two of them can never sit on top of one another.
-        boxes.forEach(box => {
-          box.cx = box.members.reduce((t, m) => t + m.wx, 0) / box.members.length;
-          box.w = WAY_W - 12 + (box.members.length - 1) * 24;
-        });
-        boxes.sort((a, b) => a.cx - b.cx);
-        let edge = -Infinity;
-        boxes.forEach(box => {
-          if (box.cx - box.w / 2 < edge) box.cx = edge + box.w / 2;
-          edge = box.cx + box.w / 2 + 14;
-        });
-        // Where each supply enters the top of its box, and which level its run
-        // takes to get there. Levels run across the whole section, longest run
-        // highest, so the runs nest and never share a line.
-        const routed = [];
-        boxes.forEach(box => box.members.forEach((m, k) => {
-          m.enterX = box.members.length > 1
-            ? box.cx - box.w / 2 + box.w * (k + 1) / (box.members.length + 1)
-            : m.wx;
-          if (box.members.length > 1) routed.push(m);
-        }));
-        routed.sort((a, b) => Math.abs(b.wx - b.enterX) - Math.abs(a.wx - a.enterX));
-        routed.forEach((m, k) => { m.level = k; });
-
-        plans.forEach(pl => {
+        sec.ways.map(way => planOf[way.id]).forEach(pl => {
           const { way, i, wx, down, feedsDown, across, head, headIsSwitch, chain, cy, endsAtLoad, box } = pl;
           const at = out.length;
           const wGrab = canEdit() ? ` data-drag="way" data-drag-id="${way.id}" data-drag-label="${esc(way.name)}"` : '';
@@ -1463,7 +1471,9 @@
           if (headIsSwitch) {
             out.push(hvDevice(wx, wayTapY, head));
           } else {
-            out.push(hvBreaker(wx, wayTapY, C.line));
+            // A low-tension board's way carries nothing at the bar: it simply
+            // leaves it, and only its designation is written up the side.
+            if (net.tier !== 'lt') out.push(hvBreaker(wx, wayTapY, C.line));
             out.push(hvTag(wx - TAG_X, wayTapY + 26, way.name, C.label, 12));
           }
 
@@ -1953,7 +1963,7 @@
       ${lowTension ? field('Taps which end', 'side', isEdit ? (way.side || '') : 'l', { type: 'select', required: false,
         options: [{ value: '', label: '— the whole bar —' }, { value: 'l', label: 'Left' }, { value: 'r', label: 'Right' }],
         hint: 'Ways on an end are drawn along that run of the bar, clear of where the incomers land.' }) : ''}
-      ${isEdit ? '' : field('At the busbar', 'head_kind', 'switchgear', { type: 'select', required: true,
+      ${isEdit || lowTension ? '' : field('At the busbar', 'head_kind', 'switchgear', { type: 'select', required: true,
         options: Object.entries(HEAD_KINDS).map(([value, label]) => ({ value, label })),
         hint: 'Switchgear is the X; a switch is the open blade.' })}
       ${isEdit ? '' : field('Runs into chiller', 'chiller', '', { placeholder: 'e.g. CH#1',
@@ -1978,7 +1988,7 @@
           dest_board_id: d.dest_board_id ? Number(d.dest_board_id) : null,
           dest_switchboard_id: d.dest_switchboard_id ? Number(d.dest_switchboard_id) : null,
           dest_label: d.dest_label || '', dest_detail: d.dest_detail || '', notes: d.notes || '',
-          head_kind: d.head_kind || 'switchgear', chiller: d.chiller || '',
+          head_kind: lowTension ? 'none' : (d.head_kind || 'switchgear'), chiller: d.chiller || '',
           side: d.side === undefined ? (isEdit ? (way.side || '') : '') : d.side,
         };
         if (isEdit) { state.focus = 'hv-way-' + way.id; await api('PUT', '/api/hv/ways/' + way.id, body); await afterChange('Way updated'); }

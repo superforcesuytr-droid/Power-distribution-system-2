@@ -864,17 +864,22 @@ func (s *Store) CreateHVWay(ctx context.Context, role string, w model.HVWay, net
 			return err
 		}
 		// A way is drawn from where it taps the bus down, so a new one starts
-		// with whatever stands at that tap.
-		if !model.IsHead(headKind) {
-			headKind = model.DeviceSwitchgear
-		}
-		if _, err := tx.Exec(ctx, `INSERT INTO hv_devices (way_id, kind, name, rating_a, position)
-			VALUES ($1, $2::hv_device_kind, $3, $4, 0)`, id, headKind, w.Name, w.RatingA); err != nil {
-			return err
+		// with whatever stands at that tap. On a low-tension board nothing
+		// does: the way simply leaves the bar.
+		pos := 0
+		if headKind != "none" {
+			if !model.IsHead(headKind) {
+				headKind = model.DeviceSwitchgear
+			}
+			if _, err := tx.Exec(ctx, `INSERT INTO hv_devices (way_id, kind, name, rating_a, position)
+				VALUES ($1, $2::hv_device_kind, $3, $4, 0)`, id, headKind, w.Name, w.RatingA); err != nil {
+				return err
+			}
+			pos = 1
 		}
 		if chiller != "" {
 			if _, err := tx.Exec(ctx, `INSERT INTO hv_devices (way_id, kind, name, position)
-				VALUES ($1, 'chiller', $2, 1)`, id, chiller); err != nil {
+				VALUES ($1, 'chiller', $2, $3)`, id, chiller, pos); err != nil {
 				return err
 			}
 		}
