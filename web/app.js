@@ -2591,12 +2591,30 @@
     const on = isEdit ? hvBoardOfSection(sec.id) : (hvFindBoard(Number(boardId)) || boards[0]);
     formModal(isEdit ? 'Rename ' + sec.name : 'Add bus section', `
       ${isEdit ? '' : field('On switchboard', 'switchboard_id', on ? on.id : '', { type: 'select', required: true, full: true, options: boards.map(b => ({ value: b.id, label: b.name })) })}
-      ${field('Section name', 'name', isEdit ? sec.name : 'Section ' + String.fromCharCode(65 + ((on && on.sections.length) || 0)), { required: true, full: true, hint: 'A length of busbar. Every feeder on it backs every way tapping it.' })}`,
+      ${field('Section name', 'name', isEdit ? sec.name : 'Section ' + String.fromCharCode(65 + ((on && on.sections.length) || 0)), { required: true, full: true, hint: 'A length of busbar. Every feeder on it backs every way tapping it.' })}
+      ${isEdit && hvPlacedOn(sec).length ? `<div class="field inline full"><input type="checkbox" name="tidy" id="sec_tidy"><label for="sec_tidy">Space every column on this bar automatically again${' · ' + plural(hvPlacedOn(sec).length, 'column')} placed by hand</label></div>` : ''}`,
       async d => {
-        if (isEdit) { await api('PUT', '/api/hv/sections/' + sec.id, { name: d.name }); await afterChange('Section renamed'); }
+        if (isEdit) {
+          await api('PUT', '/api/hv/sections/' + sec.id, { name: d.name });
+          // Putting a column back into the automatic spacing is how a bar that
+          // has been dragged into a muddle is untangled, so it is offered for
+          // the whole bar at once and not only one column at a time.
+          if (d.tidy === 'on') {
+            for (const item of hvPlacedOn(sec)) {
+              await api('POST', '/api/hv/' + (item.kind === 'way' ? 'ways' : 'feeders') + '/' + item.id + '/place', { auto: true });
+            }
+          }
+          await afterChange(d.tidy === 'on' ? 'Bar spaced out again' : 'Section renamed');
+        }
         else { await api('POST', '/api/hv/sections', { name: d.name, switchboard_id: Number(d.switchboard_id) }); await afterChange('Bus section added'); }
       },
       isEdit && canManage() ? { deleteLabel: 'Delete section', onDelete: () => hvDeleteSection(sec) } : {});
+  }
+  // The columns on a bar that were dropped where they are rather than spaced
+  // out by the drawing.
+  function hvPlacedOn(sec) {
+    return (sec.feeders || []).filter(f => f.offset_x != null).map(f => ({ kind: 'feeder', id: f.id }))
+      .concat((sec.ways || []).filter(w => w.offset_x != null).map(w => ({ kind: 'way', id: w.id })));
   }
   function hvDeleteSection(sec) {
     confirmModal('Delete bus section', `Delete <b>${esc(sec.name)}</b> with its ${plural(sec.feeders.length, 'incoming feeder')} and ${plural(sec.ways.length, 'outgoing way')}, and any coupler tied to it? This cannot be undone.`,
