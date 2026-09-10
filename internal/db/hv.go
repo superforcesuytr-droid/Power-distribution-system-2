@@ -209,14 +209,14 @@ func (s *Store) HVNetwork(ctx context.Context, id int64) (*model.HVNetwork, erro
 
 	var sections []model.HVSection
 	secAt := map[int64]int{}
-	srows, err := pool.Query(ctx, `SELECT id, network_id, switchboard_id, name, position FROM hv_sections
+	srows, err := pool.Query(ctx, `SELECT id, network_id, switchboard_id, name, position, width FROM hv_sections
 		WHERE network_id = $1 ORDER BY position, id`, n.ID)
 	if err != nil {
 		return nil, err
 	}
 	for srows.Next() {
 		var sec model.HVSection
-		if err := srows.Scan(&sec.ID, &sec.NetworkID, &sec.SwitchboardID, &sec.Name, &sec.Position); err != nil {
+		if err := srows.Scan(&sec.ID, &sec.NetworkID, &sec.SwitchboardID, &sec.Name, &sec.Position, &sec.Width); err != nil {
 			srows.Close()
 			return nil, err
 		}
@@ -668,6 +668,25 @@ func (s *Store) UpdateHVSection(ctx context.Context, role string, id int64, name
 			return ErrNotFound
 		}
 		return s.audit(ctx, tx, role, "update", "hv_section", id, "Renamed bus section to "+name)
+	})
+}
+
+// SetHVSectionWidth runs a busbar out to a length of its own, or back to
+// however long what is on it needs it to be.
+func (s *Store) SetHVSectionWidth(ctx context.Context, role string, id int64, width *float64) error {
+	return s.withTx(ctx, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE hv_sections SET width = $2, updated_at = now() WHERE id = $1`, id, width)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrNotFound
+		}
+		what := "Set the busbar length"
+		if width == nil {
+			what = "Let the busbar find its own length"
+		}
+		return s.audit(ctx, tx, role, "update", "hv_section", id, what)
 	})
 }
 

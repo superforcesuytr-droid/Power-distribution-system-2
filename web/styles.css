@@ -364,6 +364,11 @@ g.flash { animation: hvflash 1.7s ease-out; }
 g.hv-col.flash .hv-col-plate { animation: hvplateflash 1.7s ease-out; }
 @keyframes hvplateflash { 0% { fill-opacity: .3; } 100% { fill-opacity: 0; } }
 
+/* The grip on the end of a busbar. It sits quietly until the bar is pointed
+   at, so a drawing is not a row of handles. */
+.hv-span { cursor: ew-resize; opacity: .45; transition: opacity .12s ease; }
+.hv-span:hover, .sld-canvas.dropping .hv-span { opacity: 1; }
+
 .hv-ref { cursor: pointer; }
 .hv-ref text { text-decoration: underline; text-underline-offset: 3px; }
 .hv-ref:hover text { fill: var(--primary); }

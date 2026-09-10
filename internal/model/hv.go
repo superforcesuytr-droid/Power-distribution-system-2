@@ -226,13 +226,16 @@ func trimNum(v float64) string {
 // that tap it. A coupler is what divides one section from the next, which is
 // why a way belongs to a section rather than to any one feeder.
 type HVSection struct {
-	ID            int64      `json:"id"`
-	NetworkID     int64      `json:"network_id"`
-	SwitchboardID int64      `json:"switchboard_id"`
-	Name          string     `json:"name"`
-	Position      int        `json:"position"`
-	Feeders       []HVFeeder `json:"feeders"`
-	Ways          []HVWay    `json:"ways"`
+	ID            int64  `json:"id"`
+	NetworkID     int64  `json:"network_id"`
+	SwitchboardID int64  `json:"switchboard_id"`
+	Name          string `json:"name"`
+	Position      int    `json:"position"`
+	// Width is how long the busbar is drawn, when it has been run out by hand
+	// to leave room for more ways. Null means as long as what is on it needs.
+	Width   *float64   `json:"width"`
+	Feeders []HVFeeder `json:"feeders"`
+	Ways    []HVWay    `json:"ways"`
 }
 
 // Backing names the feeders that hold a section up, for labels and tooltips.

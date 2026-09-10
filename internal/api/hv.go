@@ -29,6 +29,7 @@ func (s *Server) routesHV(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/hv/sections", s.requireRole(model.RoleSupervisor, s.handleHVSectionCreate))
 	mux.HandleFunc("PUT /api/hv/sections/{id}", s.requireRole(model.RoleSupervisor, s.handleHVSectionUpdate))
 	mux.HandleFunc("DELETE /api/hv/sections/{id}", s.requireRole(model.RoleSupervisor, s.handleHVSectionDelete))
+	mux.HandleFunc("POST /api/hv/sections/{id}/span", s.requireRole(model.RoleTechnician, s.handleHVSectionSpan))
 
 	mux.HandleFunc("POST /api/hv/feeders", s.requireRole(model.RoleSupervisor, s.handleHVFeederCreate))
 	mux.HandleFunc("PUT /api/hv/feeders/{id}", s.requireRole(model.RoleSupervisor, s.handleHVFeederUpdate))
@@ -962,6 +963,39 @@ func (s *Server) handleHVSectionCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 201, map[string]int64{"id": id})
+}
+
+// handleHVSectionSpan runs a busbar out to a given length, or back to
+// automatic when the request says so.
+func (s *Server) handleHVSectionSpan(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	var in struct {
+		Width *float64 `json:"width"`
+		Auto  bool     `json:"auto"`
+	}
+	if err := decode(r, &in); err != nil {
+		fail(w, err)
+		return
+	}
+	width := in.Width
+	if in.Auto {
+		width = nil
+	} else if width == nil || *width <= 0 {
+		fail(w, &db.UserError{Msg: "A busbar needs a length to be drawn to."})
+		return
+	} else if *width > 40000 {
+		fail(w, &db.UserError{Msg: "That is longer than a busbar can be drawn."})
+		return
+	}
+	if err := s.Store.SetHVSectionWidth(ctx(r), roleOf(r), id, width); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
 func (s *Server) handleHVSectionUpdate(w http.ResponseWriter, r *http.Request) {

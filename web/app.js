@@ -1030,6 +1030,19 @@
         drag.ghost.style.left = e.clientX + 14 + 'px';
         drag.ghost.style.top = e.clientY + 14 + 'px';
       }
+      // The end of a busbar: the guide is the bar as it would be drawn.
+      if (drag.column === 'span') {
+        const sp = (hvLayout && hvLayout.spans || {})[drag.id];
+        const at = toSvg(e.clientX, e.clientY);
+        if (sp && at) {
+          drag.width = Math.max(sp.min, Math.min(40000, Math.round((at.x - sp.left) / 6) * 6));
+          hint.classList.remove('bar');
+          hint.setAttribute('x', sp.left); hint.setAttribute('y', sp.busY - 4);
+          hint.setAttribute('width', drag.width); hint.setAttribute('height', 8);
+          hint.style.display = '';
+        }
+        return;
+      }
       const z = drag.column ? slotAt(e.clientX, e.clientY, drag.column, drag.id) : zoneAt(e.clientX, e.clientY);
       drag.zone = z;
       if (drag.column) {
@@ -1068,6 +1081,19 @@
       hint.style.display = 'none';
       canvas.classList.remove('dropping');
       hvDragEndedAt = Date.now();
+      if (d.column === 'span') {
+        unshift();
+        const sp = (hvLayout && hvLayout.spans || {})[d.id] || {};
+        if (d.width == null) return;
+        // Dragged back to where the bar would end on its own, it goes back to
+        // finding its own length rather than being held at that one.
+        const auto = d.width <= (sp.min || 0) + 8;
+        try {
+          await api('POST', '/api/hv/sections/' + d.id + '/span', auto ? { auto: true } : { width: d.width });
+          await afterChange(auto ? 'Busbar back to its own length' : 'Busbar run out');
+        } catch (err) { toast(err.message, 'error'); }
+        return;
+      }
       if (d.column) {
         // Let go and the column snaps into the gap the others opened for it,
         // then the diagram is redrawn from what was saved.
@@ -1226,7 +1252,8 @@
       plan.autoW = sec.ways.filter(w => w.offset_x == null);
       if (!sided) {
         const nf = Math.max(1, plan.autoF.length), nw = Math.max(1, plan.autoW.length + plan.autoU.length);
-        plan.width = Math.max(nf * FEEDER_W, runW(nw), 420);
+        plan.min = Math.max(nf * FEEDER_W, runW(nw), 420);
+        plan.width = Math.max(plan.min, Number(sec.width) || 0);
         return plan;
       }
       plan.lf = split(plan.over, 'l');
@@ -1238,7 +1265,8 @@
       plan.bandW = Math.max(1, plan.autoF.length) * FEEDER_W;
       plan.lwW = runW(plan.lw.filter(w => w.offset_x == null).length + plan.lu.filter(f => f.offset_x == null).length);
       plan.rwW = runW(plan.rw.filter(w => w.offset_x == null).length + plan.ru.filter(f => f.offset_x == null).length);
-      plan.width = Math.max(plan.bandW + plan.lwW + plan.rwW + SIDE_PAD * 2, 420);
+      plan.min = Math.max(plan.bandW + plan.lwW + plan.rwW + SIDE_PAD * 2, 420);
+      plan.width = Math.max(plan.min, Number(sec.width) || 0);
       return plan;
     };
     const boards = (net.switchboards || []).map(board => {
@@ -1523,9 +1551,10 @@
     // run per kind, and per side where a bar is fed from both ends. Every run
     // carries its own band, because the boards are stacked and a point on the
     // page belongs to one board's ways or another's incomers.
-    hvLayout = { groups: [], dots: {}, minDot: MIN_DOT };
+    hvLayout = { groups: [], dots: {}, spans: {}, minDot: MIN_DOT };
     boards.forEach(g => g.secs.forEach(sg => {
       hvLayout.dots[sg.sec.id] = sg.dots;
+      hvLayout.spans[sg.sec.id] = { left: sg.left, width: sg.width, min: sg.min, busY: g.busY };
       sg.groups.forEach(run => {
         hvLayout.groups.push({
           ...run, sectionId: sg.sec.id, name: sg.sec.name,
@@ -1551,6 +1580,7 @@
       const board = g.board;
       const { feederY, swY, busY, wayTapY, destY } = g;
       const secAt = {};
+      const grips = [];
       g.secs.forEach((sg, i) => { secAt[sg.sec.id] = { ...sg, i }; });
 
       // Worked out before anything on this board is drawn: where each way's
@@ -1682,7 +1712,9 @@
             + [board.current_a != null ? fmtA(board.current_a) + 'A' : '',
               board.fault_ka != null ? fmtA(board.fault_ka) + 'kA' : ''].filter(Boolean).join('/')
           : '');
-      out.push(`<g id="hv-board-${board.id}" class="${canManage() ? 'hv-node' : ''}" ${canManage() ? `data-action="hv-edit-board" data-id="${board.id}"` : ''}>
+      // Drawn after the columns, so an incomer standing at the left-hand end of
+      // the bar cannot take the pointer from the board's own name.
+      grips.push(`<g id="hv-board-${board.id}" class="${canManage() ? 'hv-node' : ''}" ${canManage() ? `data-action="hv-edit-board" data-id="${board.id}"` : ''}>
         <title>${esc(board.name)}${rating ? ' · ' + esc(rating) : ''}${canManage() ? ' - click to change its rating' : ''}</title>
         <rect x="${g.busL}" y="${busY - 62}" width="300" height="40" fill="transparent"/>
         <text x="${g.busL + 2}" y="${busY - 44}" font-size="15" font-weight="700" fill="${C.bus}">${esc(board.name)}</text>
@@ -1695,6 +1727,21 @@
         // The section's own busbar. A coupler is what separates it from the next.
         out.push(`<line x1="${sg.busL}" y1="${busY}" x2="${sg.busR}" y2="${busY}"
           stroke="${C.bus}" stroke-width="6" stroke-linecap="round"/>`);
+        // The grip on the end of the bar: drag it out and the bar is drawn
+        // longer, leaving bare bar to drop more ways onto. Drag it back in and
+        // the bar goes back to however long what is on it needs.
+        if (canEdit()) {
+          const gx = sg.left + sg.width;
+          // Drawn after everything else on the board, so a coupler running out
+          // of the same point cannot take the pointer from it.
+          grips.push(`<g class="hv-span hv-grab" data-drag="span" data-drag-id="${sec.id}" data-drag-label="${esc(sec.name)}">
+            <title>${esc(sec.name)} - drag to run the busbar out for more ways${sg.sec.width ? ', or back in to let it find its own length' : ''}</title>
+            <rect x="${gx - 12}" y="${busY - 22}" width="30" height="44" fill="transparent"/>
+            <line x1="${gx + 5}" y1="${busY - 11}" x2="${gx + 5}" y2="${busY + 11}" stroke="${C.bus}" stroke-width="3" stroke-linecap="round"/>
+            <path d="M ${gx + 10} ${busY - 6} L ${gx + 16} ${busY} L ${gx + 10} ${busY + 6}" fill="none"
+                  stroke="${C.bus}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </g>`);
+        }
 
         // Incomers, spread across the top of the section. One fed from a way on
         // this drawing is not among them: it hangs under the bar with the ways.
@@ -1937,6 +1984,7 @@
           <text x="${mid}" y="${busY + 34}" text-anchor="middle" font-size="10" letter-spacing="1" fill="${c.closed ? C.prot : C.muted}">${c.closed ? 'CLOSED · TIED' : 'OPEN'}</text>
         </g>`);
       });
+      grips.forEach(gr => out.push(gr));
     });
 
     // The run joining an incomer to the way that feeds it. Both hang under
@@ -2396,9 +2444,12 @@
   function hvTapSources(f, sectionId) {
     const own = hvBoardOfSection(f ? f.section_id : sectionId);
     const out = [];
+    const keep = f && f.source_way_id;
     hvBoards().forEach(b => {
-      if (own && b.id === own.id) return;
       b.sections.forEach(sec => sec.ways.forEach(w => {
+        // A board does not feed itself, so its own ways are not offered - but
+        // one already named stays on the list, or saving would quietly drop it.
+        if (own && b.id === own.id && w.id !== keep) return;
         out.push({ value: w.id, label: b.name + ' · ' + (w.name || 'unnamed way') });
       }));
     });
@@ -2709,7 +2760,9 @@
     formModal(isEdit ? 'Rename ' + sec.name : 'Add bus section', `
       ${isEdit ? '' : field('On switchboard', 'switchboard_id', on ? on.id : '', { type: 'select', required: true, full: true, options: boards.map(b => ({ value: b.id, label: b.name })) })}
       ${field('Section name', 'name', isEdit ? sec.name : 'Section ' + String.fromCharCode(65 + ((on && on.sections.length) || 0)), { required: true, full: true, hint: 'A length of busbar. Every feeder on it backs every way tapping it.' })}
-      ${isEdit && hvPlacedOn(sec).length ? `<div class="field inline full"><input type="checkbox" name="tidy" id="sec_tidy"><label for="sec_tidy">Space every column on this bar automatically again${' · ' + plural(hvPlacedOn(sec).length, 'column')} placed by hand</label></div>` : ''}`,
+      ${isEdit && hvPlacedOn(sec).length ? `<div class="field inline full"><input type="checkbox" name="tidy" id="sec_tidy"><label for="sec_tidy">Space every column on this bar automatically again${' · ' + plural(hvPlacedOn(sec).length, 'column')} placed by hand</label></div>` : ''}
+      ${isEdit && sec.width ? `<div class="field inline full"><input type="checkbox" name="autospan" id="sec_span"><label for="sec_span">Let this busbar find its own length again · it is held at ${Math.round(sec.width)} across</label></div>` : ''}
+      ${isEdit ? '<p class="field full hint" style="margin:0">Drag the arrow on the end of the busbar to run it out longer, for room to drop more ways on.</p>' : ''}`,
       async d => {
         if (isEdit) {
           await api('PUT', '/api/hv/sections/' + sec.id, { name: d.name });
@@ -2721,7 +2774,9 @@
               await api('POST', '/api/hv/' + (item.kind === 'way' ? 'ways' : 'feeders') + '/' + item.id + '/place', { auto: true });
             }
           }
-          await afterChange(d.tidy === 'on' ? 'Bar spaced out again' : 'Section renamed');
+          if (d.autospan === 'on') await api('POST', '/api/hv/sections/' + sec.id + '/span', { auto: true });
+          await afterChange(d.tidy === 'on' ? 'Bar spaced out again'
+            : (d.autospan === 'on' ? 'Busbar back to its own length' : 'Section renamed'));
         }
         else { await api('POST', '/api/hv/sections', { name: d.name, switchboard_id: Number(d.switchboard_id) }); await afterChange('Bus section added'); }
       },
