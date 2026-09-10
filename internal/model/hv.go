@@ -139,6 +139,24 @@ func ValidTier(t string) bool {
 	return false
 }
 
+// Which end of a bus an incomer backs, and which end a way taps. Blank means
+// the bar is not split into sides, which is how a high-tension board is drawn.
+const (
+	SideLeft  = "l"
+	SideRight = "r"
+)
+
+// Sides lists the ends of a bar with the label a form gives each.
+var Sides = []struct{ Side, Label string }{
+	{SideLeft, "Left"},
+	{SideRight, "Right"},
+}
+
+// ValidSide reports whether s names an end of a bar, or no side at all.
+func ValidSide(s string) bool {
+	return s == "" || s == SideLeft || s == SideRight
+}
+
 // HVSwitchboard is one switchboard: its rating, the bus sections it is split
 // into and the couplers between them. A way on the board above lands on it.
 type HVSwitchboard struct {
@@ -240,7 +258,10 @@ type HVFeeder struct {
 	Switchgear string `json:"switchgear"`
 	// Kind decides the symbol above the switchgear: a plain supply or a
 	// generator.
-	Kind      string     `json:"kind"`
+	Kind string `json:"kind"`
+	// Side is the end of the bar this incomer backs, on a board fed from both
+	// ends. Blank when the bar is not split into sides.
+	Side      string     `json:"side"`
 	Voltage   string     `json:"voltage"`
 	Source    string     `json:"source"`
 	RatingA   *float64   `json:"rating_a"`
@@ -257,6 +278,8 @@ type HVWay struct {
 	SectionID int64    `json:"section_id"`
 	Name      string   `json:"name"`
 	RatingA   *float64 `json:"rating_a"`
+	// Side is the end of the bar this way taps, on a board fed from both ends.
+	Side string `json:"side"`
 
 	// Devices are everything fitted on this way, in the order they appear down
 	// the conductor.

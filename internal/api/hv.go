@@ -174,12 +174,14 @@ type hvFeederInput struct {
 	Kind       string `json:"kind"`
 	// Only read when an incomer is created: what it lands through, and the
 	// designation of the transformer when it lands through one.
-	Arrangement string   `json:"arrangement"`
-	Transformer string   `json:"transformer"`
-	SectionID   int64    `json:"section_id"`
-	Voltage     string   `json:"voltage"`
-	Source      string   `json:"source"`
-	RatingA     *float64 `json:"rating_a"`
+	Arrangement string `json:"arrangement"`
+	Transformer string `json:"transformer"`
+	// Side is the end of the bar it backs, on a board fed from both ends.
+	Side      string   `json:"side"`
+	SectionID int64    `json:"section_id"`
+	Voltage   string   `json:"voltage"`
+	Source    string   `json:"source"`
+	RatingA   *float64 `json:"rating_a"`
 }
 
 func (in hvFeederInput) toModel(id, networkID int64, defVoltage string) (model.HVFeeder, error) {
@@ -188,6 +190,7 @@ func (in hvFeederInput) toModel(id, networkID int64, defVoltage string) (model.H
 		Name:       strings.ToUpper(strings.TrimSpace(in.Name)),
 		Switchgear: strings.ToUpper(strings.TrimSpace(in.Switchgear)),
 		Kind:       strings.TrimSpace(in.Kind),
+		Side:       strings.TrimSpace(in.Side),
 		Voltage:    strings.TrimSpace(in.Voltage),
 		Source:     strings.TrimSpace(in.Source),
 		RatingA:    in.RatingA,
@@ -200,6 +203,9 @@ func (in hvFeederInput) toModel(id, networkID int64, defVoltage string) (model.H
 	}
 	if !model.ValidFeederKind(f.Kind) {
 		return f, &db.UserError{Msg: "An incomer is either an incoming supply or a generator."}
+	}
+	if !model.ValidSide(f.Side) {
+		return f, &db.UserError{Msg: "A side is either the left or the right of the bar."}
 	}
 	if f.Voltage == "" {
 		f.Voltage = defVoltage
@@ -315,6 +321,8 @@ func (s *Server) handleHVFeederMove(w http.ResponseWriter, r *http.Request) {
 type hvPlaceInput struct {
 	SectionID int64 `json:"section_id"`
 	Index     int   `json:"index"`
+	// Side is the end of the bar the column was dropped on.
+	Side string `json:"side"`
 }
 
 func (s *Server) handleHVFeederPlace(w http.ResponseWriter, r *http.Request) {
@@ -328,7 +336,11 @@ func (s *Server) handleHVFeederPlace(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	if err := s.Store.PlaceHVFeeder(ctx(r), roleOf(r), id, in.SectionID, in.Index); err != nil {
+	if !model.ValidSide(in.Side) {
+		fail(w, &db.UserError{Msg: "A side is either the left or the right of the bar."})
+		return
+	}
+	if err := s.Store.PlaceHVFeeder(ctx(r), roleOf(r), id, in.SectionID, in.Index, in.Side); err != nil {
 		fail(w, err)
 		return
 	}
@@ -352,6 +364,8 @@ type hvWayInput struct {
 	// the machine at the foot of it when the way runs straight into a load.
 	HeadKind string `json:"head_kind"`
 	Chiller  string `json:"chiller"`
+	// Side is the end of the bar it taps, on a board fed from both ends.
+	Side string `json:"side"`
 }
 
 func (in hvWayInput) toModel(id int64) (model.HVWay, error) {
@@ -359,6 +373,7 @@ func (in hvWayInput) toModel(id int64) (model.HVWay, error) {
 		ID: id, SectionID: in.SectionID,
 		Name:              strings.TrimSpace(in.Name),
 		RatingA:           in.RatingA,
+		Side:              strings.TrimSpace(in.Side),
 		DestBoardID:       in.DestBoardID,
 		DestSwitchboardID: in.DestSwitchboardID,
 		DestLabel:         strings.TrimSpace(in.DestLabel),
@@ -370,6 +385,9 @@ func (in hvWayInput) toModel(id int64) (model.HVWay, error) {
 	}
 	if w.RatingA != nil && (*w.RatingA <= 0 || *w.RatingA > 100000) {
 		return w, &db.UserError{Msg: "Rating must be between 0 and 100000 A."}
+	}
+	if !model.ValidSide(w.Side) {
+		return w, &db.UserError{Msg: "A side is either the left or the right of the bar."}
 	}
 	// A way lands in one place. A destination carries its own name, so a
 	// separate label, or a second destination, would only contradict it.
@@ -572,7 +590,11 @@ func (s *Server) handleHVWayPlace(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	if err := s.Store.PlaceHVWay(ctx(r), roleOf(r), id, in.SectionID, in.Index); err != nil {
+	if !model.ValidSide(in.Side) {
+		fail(w, &db.UserError{Msg: "A side is either the left or the right of the bar."})
+		return
+	}
+	if err := s.Store.PlaceHVWay(ctx(r), roleOf(r), id, in.SectionID, in.Index, in.Side); err != nil {
 		fail(w, err)
 		return
 	}

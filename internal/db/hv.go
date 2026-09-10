@@ -163,7 +163,7 @@ func (s *Store) HVNetwork(ctx context.Context, id int64) (*model.HVNetwork, erro
 
 	var feeders []model.HVFeeder
 	feederAt := map[int64]int{}
-	rows, err := pool.Query(ctx, `SELECT id, network_id, coalesce(section_id, 0), name, switchgear, kind,
+	rows, err := pool.Query(ctx, `SELECT id, network_id, coalesce(section_id, 0), name, switchgear, kind, side,
 		voltage, source, rating_a, position, created_at, updated_at
 		FROM hv_feeders WHERE network_id = $1 ORDER BY position, name`, n.ID)
 	if err != nil {
@@ -171,7 +171,7 @@ func (s *Store) HVNetwork(ctx context.Context, id int64) (*model.HVNetwork, erro
 	}
 	for rows.Next() {
 		var f model.HVFeeder
-		if err := rows.Scan(&f.ID, &f.NetworkID, &f.SectionID, &f.Name, &f.Switchgear, &f.Kind,
+		if err := rows.Scan(&f.ID, &f.NetworkID, &f.SectionID, &f.Name, &f.Switchgear, &f.Kind, &f.Side,
 			&f.Voltage, &f.Source, &f.RatingA, &f.Position, &f.CreatedAt, &f.UpdatedAt); err != nil {
 			rows.Close()
 			return nil, err
@@ -188,7 +188,7 @@ func (s *Store) HVNetwork(ctx context.Context, id int64) (*model.HVNetwork, erro
 	// Ways, with the destination resolved so the diagram can link to it.
 	var ways []model.HVWay
 	wayAt := map[int64]int{}
-	wrows, err := pool.Query(ctx, `SELECT w.id, coalesce(w.section_id, 0), w.name, w.rating_a,
+	wrows, err := pool.Query(ctx, `SELECT w.id, coalesce(w.section_id, 0), w.name, w.rating_a, w.side,
 		w.dest_board_id, w.dest_switchboard_id, w.dest_label, w.dest_detail, w.notes, w.position,
 		w.created_at, w.updated_at,
 		coalesce(bo.code, ''), coalesce(b.name, ''), coalesce(sb.name, ''),
@@ -205,7 +205,7 @@ func (s *Store) HVNetwork(ctx context.Context, id int64) (*model.HVNetwork, erro
 	}
 	for wrows.Next() {
 		var w model.HVWay
-		if err := wrows.Scan(&w.ID, &w.SectionID, &w.Name, &w.RatingA,
+		if err := wrows.Scan(&w.ID, &w.SectionID, &w.Name, &w.RatingA, &w.Side,
 			&w.DestBoardID, &w.DestSwitchboardID, &w.DestLabel, &w.DestDetail, &w.Notes, &w.Position,
 			&w.CreatedAt, &w.UpdatedAt,
 			&w.DestBoardCode, &w.DestBuildingName, &w.DestSwitchboardName,
@@ -625,9 +625,9 @@ func (s *Store) CreateHVFeeder(ctx context.Context, role string, f model.HVFeede
 				return err
 			}
 		}
-		if err := tx.QueryRow(ctx, `INSERT INTO hv_feeders (network_id, section_id, name, switchgear, kind, voltage, source, rating_a, position)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,(SELECT coalesce(max(position),-1)+1 FROM hv_feeders WHERE network_id = $1))
-			RETURNING id`, f.NetworkID, section, f.Name, f.Switchgear, f.Kind, f.Voltage, f.Source, f.RatingA).Scan(&id); err != nil {
+		if err := tx.QueryRow(ctx, `INSERT INTO hv_feeders (network_id, section_id, name, switchgear, kind, side, voltage, source, rating_a, position)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,(SELECT coalesce(max(position),-1)+1 FROM hv_feeders WHERE network_id = $1))
+			RETURNING id`, f.NetworkID, section, f.Name, f.Switchgear, f.Kind, f.Side, f.Voltage, f.Source, f.RatingA).Scan(&id); err != nil {
 			return err
 		}
 		// A feeder is drawn from its first symbol down. A low-tension board is
@@ -653,9 +653,10 @@ func (s *Store) CreateHVFeeder(ctx context.Context, role string, f model.HVFeede
 
 func (s *Store) UpdateHVFeeder(ctx context.Context, role string, f model.HVFeeder) error {
 	return s.withTx(ctx, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `UPDATE hv_feeders SET name = $2, switchgear = $3, kind = $4, voltage = $5, source = $6,
-			rating_a = $7, section_id = coalesce(nullif($8::bigint, 0), section_id), updated_at = now()
-			WHERE id = $1`, f.ID, f.Name, f.Switchgear, f.Kind, f.Voltage, f.Source, f.RatingA, f.SectionID)
+		tag, err := tx.Exec(ctx, `UPDATE hv_feeders SET name = $2, switchgear = $3, kind = $4, side = $5,
+			voltage = $6, source = $7, rating_a = $8,
+			section_id = coalesce(nullif($9::bigint, 0), section_id), updated_at = now()
+			WHERE id = $1`, f.ID, f.Name, f.Switchgear, f.Kind, f.Side, f.Voltage, f.Source, f.RatingA, f.SectionID)
 		if err != nil {
 			return err
 		}
@@ -724,7 +725,7 @@ func (s *Store) MoveHVFeeder(ctx context.Context, role string, id int64, delta i
 // may be a different section from the one backing it now. Feeder positions run
 // across the whole network, so the whole run is renumbered section by section
 // to keep the drawing and the stored order the same.
-func (s *Store) PlaceHVFeeder(ctx context.Context, role string, id, sectionID int64, index int) error {
+func (s *Store) PlaceHVFeeder(ctx context.Context, role string, id, sectionID int64, index int, side string) error {
 	return s.withTx(ctx, func(tx pgx.Tx) error {
 		var networkID, from int64
 		var name string
@@ -773,12 +774,26 @@ func (s *Store) PlaceHVFeeder(ctx context.Context, role string, id, sectionID in
 			return err
 		}
 
+		if _, err := tx.Exec(ctx, `UPDATE hv_feeders SET side = $2 WHERE id = $1`, id, side); err != nil {
+			return err
+		}
 		pos := 0
 		for _, sid := range order {
 			run := held[sid]
-			if sid == to {
-				run = insertAt(run, id, index)
+			// A section's incomers are stored left side first, then right, so an
+			// index within a side is an index into that side's own run.
+			left, right, err := splitBySide(ctx, tx, `hv_feeders`, run)
+			if err != nil {
+				return err
 			}
+			if sid == to {
+				if side == model.SideRight {
+					right = insertAt(right, id, index)
+				} else {
+					left = insertAt(left, id, index)
+				}
+			}
+			run = append(left, right...)
 			for _, fid := range run {
 				section := sid
 				if _, err := tx.Exec(ctx, `UPDATE hv_feeders SET section_id = $2, position = $3, updated_at = now()
@@ -841,11 +856,11 @@ func (s *Store) CreateHVWay(ctx context.Context, role string, w model.HVWay, net
 				return err
 			}
 		}
-		if err := tx.QueryRow(ctx, `INSERT INTO hv_ways (section_id, name, rating_a, dest_board_id, dest_switchboard_id,
+		if err := tx.QueryRow(ctx, `INSERT INTO hv_ways (section_id, name, rating_a, side, dest_board_id, dest_switchboard_id,
 			dest_label, dest_detail, notes, position)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,
 			(SELECT coalesce(max(position),-1)+1 FROM hv_ways WHERE section_id = $1)) RETURNING id`,
-			section, w.Name, w.RatingA, w.DestBoardID, w.DestSwitchboardID, w.DestLabel, w.DestDetail, w.Notes).Scan(&id); err != nil {
+			section, w.Name, w.RatingA, w.Side, w.DestBoardID, w.DestSwitchboardID, w.DestLabel, w.DestDetail, w.Notes).Scan(&id); err != nil {
 			return err
 		}
 		// A way is drawn from where it taps the bus down, so a new one starts
@@ -871,9 +886,9 @@ func (s *Store) CreateHVWay(ctx context.Context, role string, w model.HVWay, net
 func (s *Store) UpdateHVWay(ctx context.Context, role string, w model.HVWay) error {
 	return s.withTx(ctx, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `UPDATE hv_ways SET section_id = coalesce(nullif($2::bigint, 0), section_id),
-			name = $3, rating_a = $4, dest_board_id = $5, dest_switchboard_id = $6, dest_label = $7,
-			dest_detail = $8, notes = $9, updated_at = now() WHERE id = $1`,
-			w.ID, w.SectionID, w.Name, w.RatingA, w.DestBoardID, w.DestSwitchboardID, w.DestLabel,
+			name = $3, rating_a = $4, side = $5, dest_board_id = $6, dest_switchboard_id = $7, dest_label = $8,
+			dest_detail = $9, notes = $10, updated_at = now() WHERE id = $1`,
+			w.ID, w.SectionID, w.Name, w.RatingA, w.Side, w.DestBoardID, w.DestSwitchboardID, w.DestLabel,
 			w.DestDetail, w.Notes)
 		if err != nil {
 			return err
@@ -900,7 +915,7 @@ func (s *Store) DeleteHVWay(ctx context.Context, role string, id int64) error {
 
 // PlaceHVWay moves an outgoing way to a position along a bus section, which may
 // be a different section from the one it taps now.
-func (s *Store) PlaceHVWay(ctx context.Context, role string, id, sectionID int64, index int) error {
+func (s *Store) PlaceHVWay(ctx context.Context, role string, id, sectionID int64, index int, side string) error {
 	return s.withTx(ctx, func(tx pgx.Tx) error {
 		var networkID, from int64
 		var name string
@@ -925,11 +940,25 @@ func (s *Store) PlaceHVWay(ctx context.Context, role string, id, sectionID int64
 			return err
 		}
 
+		if _, err := tx.Exec(ctx, `UPDATE hv_ways SET side = $2 WHERE id = $1`, id, side); err != nil {
+			return err
+		}
+		// The ways on a section are stored left side first, then right, so an
+		// index within a side is an index into that side's own run.
 		run, err := wayOrder(ctx, tx, to, id)
 		if err != nil {
 			return err
 		}
-		for i, wid := range insertAt(run, id, index) {
+		left, right, err := splitBySide(ctx, tx, `hv_ways`, run)
+		if err != nil {
+			return err
+		}
+		if side == model.SideRight {
+			right = insertAt(right, id, index)
+		} else {
+			left = insertAt(left, id, index)
+		}
+		for i, wid := range append(left, right...) {
 			if _, err := tx.Exec(ctx, `UPDATE hv_ways SET section_id = $2, position = $3, updated_at = now()
 				WHERE id = $1`, wid, to, i); err != nil {
 				return err
@@ -948,6 +977,26 @@ func (s *Store) PlaceHVWay(ctx context.Context, role string, id, sectionID int64
 		}
 		return s.audit(ctx, tx, role, "update", "hv_way", id, "Moved way "+name+" to "+secName)
 	})
+}
+
+// splitBySide divides a run of ids into the ones on the left of a bar and the
+// ones on the right, keeping the order they came in. Anything with no side of
+// its own belongs to the left, which is where a bar that is not split into
+// sides puts everything.
+func splitBySide(ctx context.Context, tx pgx.Tx, table string, ids []int64) ([]int64, []int64, error) {
+	var left, right []int64
+	for _, id := range ids {
+		var side string
+		if err := tx.QueryRow(ctx, `SELECT side FROM `+table+` WHERE id = $1`, id).Scan(&side); err != nil {
+			return nil, nil, err
+		}
+		if side == model.SideRight {
+			right = append(right, id)
+		} else {
+			left = append(left, id)
+		}
+	}
+	return left, right, nil
 }
 
 // wayOrder lists the ways on a bus section left to right, skipping one.

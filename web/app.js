@@ -909,26 +909,20 @@
     const slotAt = (cx, cy, kind) => {
       const p = toSvg(cx, cy);
       if (!p || !hvLayout) return null;
-      const band = hvLayout[kind];
       let best = null, bestGap = Infinity;
-      hvLayout.sections.forEach(sec => {
-        const top = kind === 'way' ? sec.wayTop : sec.feederTop;
-        const bottom = kind === 'way' ? sec.wayBottom : sec.feederBottom;
-        if (p.y < top || p.y > bottom) return;
-        const gap = p.x < sec.left ? sec.left - p.x
-          : (p.x > sec.left + sec.width ? p.x - sec.left - sec.width : 0);
-        if (gap < bestGap) { bestGap = gap; best = sec; }
+      hvLayout.groups.forEach(run => {
+        if (run.kind !== kind || p.y < run.top || p.y > run.bottom) return;
+        const gap = p.x < run.left ? run.left - p.x
+          : (p.x > run.left + run.width ? p.x - run.left - run.width : 0);
+        if (gap < bestGap) { bestGap = gap; best = run; }
       });
       if (!best || bestGap > 110) return null;
-      const ids = kind === 'way' ? best.wayIds : best.feederIds;
-      const left = kind === 'way' ? best.wayLeft : best.feederLeft;
-      const top = kind === 'way' ? best.wayTop : best.feederTop;
-      const bottom = kind === 'way' ? best.wayBottom : best.feederBottom;
-      const index = Math.max(0, Math.min(ids.length, ids.length ? Math.round((p.x - left) / band.pitch) : 0));
+      const index = Math.max(0, Math.min(best.ids.length,
+        best.ids.length ? Math.round((p.x - best.left) / best.pitch) : 0));
       return {
-        sectionId: best.id, index, ids, name: best.name,
-        x: left + index * band.pitch - band.gap / 2 - 3, y: top,
-        w: 6, h: bottom - top,
+        sectionId: best.sectionId, side: best.side, index, ids: best.ids, name: best.name,
+        x: best.left + index * best.pitch - (best.pitch - best.colW) / 2 - 3, y: best.top,
+        w: 6, h: best.bottom - best.top,
       };
     };
 
@@ -941,30 +935,31 @@
     // bar opens a gap where it would land, so what will happen is the drawing
     // itself rather than a marker beside it.
     function layOut(e) {
-      const band = hvLayout[drag.column];
-      const colW = band.pitch - band.gap;
       const held = drag.zone;
-      hvLayout.sections.forEach(sec => {
-        const ids = (drag.column === 'way' ? sec.wayIds : sec.feederIds).slice();
+      hvLayout.groups.forEach(run => {
+        if (run.kind !== drag.column) return;
+        const on = held && run.sectionId === held.sectionId && run.side === held.side;
+        const ids = run.ids.slice();
         const was = ids.indexOf(drag.id);
         if (was >= 0) ids.splice(was, 1);
-        if (held && sec.id === held.sectionId) {
+        if (on) {
           let k = held.index;
           if (was >= 0 && k > was) k -= 1;
           ids.splice(Math.max(0, Math.min(k, ids.length)), 0, drag.id);
         } else if (was >= 0) {
           ids.splice(was, 0, drag.id);
         }
-        const left = sec.cx - (ids.length * colW + Math.max(0, ids.length - 1) * band.gap) / 2;
+        const span = ids.length ? ids.length * run.pitch - (run.pitch - run.colW) : run.colW;
+        const left = run.cx - span / 2;
         ids.forEach((id, i) => {
           const el = colEl(drag.column, id);
           if (!el || id === drag.id) return;
-          shift(el, left + i * band.pitch + colW / 2 - Number(el.dataset.home));
+          shift(el, left + i * run.pitch + run.colW / 2 - Number(el.dataset.home));
         });
-        if (held && sec.id === held.sectionId) {
+        if (on) {
           const el = colEl(drag.column, drag.id);
           const i = ids.indexOf(drag.id);
-          drag.snapTo = left + i * band.pitch + colW / 2 - Number(el.dataset.home);
+          if (el) drag.snapTo = left + i * run.pitch + run.colW / 2 - Number(el.dataset.home);
         }
       });
       const p = toSvg(e.clientX, e.clientY);
@@ -1036,7 +1031,7 @@
         if (at === index) { unshift(); return; }
         try {
           await api('POST', `/api/hv/${d.column === 'way' ? 'ways' : 'feeders'}/${d.id}/place`,
-            { section_id: d.zone.sectionId, index });
+            { section_id: d.zone.sectionId, index, side: d.zone.side || '' });
           await afterChange(d.label + ' moved');
         } catch (err) { unshift(); toast(err.message, 'error'); }
         return;
@@ -1133,12 +1128,33 @@
     // section is as wide as whichever it has more of: incomers above the bar or
     // ways below it. The ways are spread along the whole section, because any
     // of them is fed by the section rather than by one particular feeder.
+    // A bar can be fed from both ends. When anything on a section carries a
+    // side, the incomers take a band in the middle and the ways run out along
+    // the bar either side of it, so no way ever hangs off the point an incomer
+    // lands on. With no sides in play a section is laid out as it always was.
+    const SIDE_PAD = 32;
+    const runW = n => (n ? n * WAY_W + (n - 1) * WAY_GAP : 0);
+    const split = (list, side) => list.filter(x => (x.side === 'r') === (side === 'r'));
+    const planSection = sec => {
+      const sided = sec.feeders.some(f => f.side) || sec.ways.some(w => w.side);
+      const plan = { sec, sided };
+      if (!sided) {
+        const nf = Math.max(1, sec.feeders.length), nw = Math.max(1, sec.ways.length);
+        plan.width = Math.max(nf * FEEDER_W, runW(nw), 420);
+        return plan;
+      }
+      plan.lf = split(sec.feeders, 'l');
+      plan.rf = split(sec.feeders, 'r');
+      plan.lw = split(sec.ways, 'l');
+      plan.rw = split(sec.ways, 'r');
+      plan.bandW = Math.max(1, plan.lf.length + plan.rf.length) * FEEDER_W;
+      plan.lwW = runW(plan.lw.length);
+      plan.rwW = runW(plan.rw.length);
+      plan.width = Math.max(plan.bandW + plan.lwW + plan.rwW + SIDE_PAD * 2, 420);
+      return plan;
+    };
     const boards = (net.switchboards || []).map(board => {
-      const secs = board.sections.map(sec => {
-        const nf = Math.max(1, sec.feeders.length);
-        const nw = Math.max(1, sec.ways.length);
-        return { sec, width: Math.max(nf * FEEDER_W, nw * WAY_W + (nw - 1) * WAY_GAP, 420) };
-      });
+      const secs = board.sections.map(planSection);
       const contentW = secs.reduce((s, g) => s + g.width, 0) + Math.max(0, secs.length - 1) * SECTION_GAP;
       let feederChain = 0, wayChain = 0;
       board.sections.forEach(sec => {
@@ -1178,12 +1194,34 @@
       g.secs.forEach(sg => {
         sg.left = x; sg.cx = x + sg.width / 2;
         sg.busL = sg.left; sg.busR = sg.left + sg.width;
-        const nf = sg.sec.feeders.length, nw = sg.sec.ways.length;
-        const fLeft = sg.cx - nf * FEEDER_W / 2;
-        sg.feederX = sg.sec.feeders.map((f, k) => fLeft + k * FEEDER_W + FEEDER_W / 2);
-        const wLeft = sg.cx - (nw * WAY_W + Math.max(0, nw - 1) * WAY_GAP) / 2;
-        sg.wayLeft = wLeft;
-        sg.wayX = sg.sec.ways.map((w, k) => wLeft + k * (WAY_W + WAY_GAP) + WAY_W / 2);
+        // Every column's place on the bar, and the groups a column may be
+        // dragged within: one group per kind on an unsided section, one per
+        // kind per side on a sided one.
+        const at = new Map();
+        sg.groups = [];
+        const lay = (list, kind, side, start, pitch, colW) => {
+          list.forEach((item, k) => at.set(item.id, start + k * pitch + colW / 2));
+          const width = list.length ? list.length * pitch - (pitch - colW) : colW;
+          sg.groups.push({
+            kind, side, ids: list.map(item => item.id), left: start, width,
+            cx: start + width / 2, pitch, colW,
+          });
+        };
+        if (!sg.sided) {
+          const nf = sg.sec.feeders.length, nw = sg.sec.ways.length;
+          lay(sg.sec.feeders, 'feeder', '', sg.cx - nf * FEEDER_W / 2, FEEDER_W, FEEDER_W);
+          lay(sg.sec.ways, 'way', '', sg.cx - runW(nw) / 2, WAY_W + WAY_GAP, WAY_W);
+        } else {
+          const spare = sg.width - (sg.bandW + sg.lwW + sg.rwW);
+          const pad = Math.max(SIDE_PAD, spare / 2);
+          const bandLeft = sg.left + sg.lwW + pad;
+          lay(sg.lw, 'way', 'l', sg.left + Math.max(0, (spare - pad * 2) / 2), WAY_W + WAY_GAP, WAY_W);
+          lay(sg.lf, 'feeder', 'l', bandLeft, FEEDER_W, FEEDER_W);
+          lay(sg.rf, 'feeder', 'r', bandLeft + sg.lf.length * FEEDER_W, FEEDER_W, FEEDER_W);
+          lay(sg.rw, 'way', 'r', bandLeft + sg.bandW + pad, WAY_W + WAY_GAP, WAY_W);
+        }
+        sg.feederX = sg.sec.feeders.map(f => at.get(f.id));
+        sg.wayX = sg.sec.ways.map(w => at.get(w.id));
         x += sg.width + SECTION_GAP;
       });
     });
@@ -1208,24 +1246,18 @@
     // may reach further left than the columns once a way has landed on it.
     boards.forEach(g => { g.busL = g.secs.reduce((m, sg) => Math.min(m, sg.busL), g.left); });
 
-    // Where a whole column may be dropped when one is dragged along a bar.
-    // Every section carries its own bands, because the boards are stacked and
-    // a point on the page belongs to one board's ways or another's incomers.
-    hvLayout = {
-      way: { pitch: WAY_W + WAY_GAP, gap: WAY_GAP },
-      feeder: { pitch: FEEDER_W, gap: 0 },
-      sections: [],
-    };
-    boards.forEach(g => g.secs.forEach(sg => {
-      const nw = sg.sec.ways.length, nf = sg.sec.feeders.length;
-      hvLayout.sections.push({
-        id: sg.sec.id, name: sg.sec.name, left: sg.left, width: sg.width, cx: sg.cx,
-        wayLeft: sg.wayLeft,
-        wayIds: sg.sec.ways.map(w => w.id), wayTop: g.busY - 20, wayBottom: g.bottom + 20,
-        feederLeft: sg.cx - nf * FEEDER_W / 2,
-        feederIds: sg.sec.feeders.map(f => f.id), feederTop: g.feederY - 46, feederBottom: g.busY + 20,
+    // Where a whole column may be dropped when one is dragged along a bar: one
+    // run per kind, and per side where a bar is fed from both ends. Every run
+    // carries its own band, because the boards are stacked and a point on the
+    // page belongs to one board's ways or another's incomers.
+    hvLayout = { groups: [] };
+    boards.forEach(g => g.secs.forEach(sg => sg.groups.forEach(run => {
+      hvLayout.groups.push({
+        ...run, sectionId: sg.sec.id, name: sg.sec.name,
+        top: run.kind === 'way' ? g.busY - 20 : g.feederY - 46,
+        bottom: run.kind === 'way' ? g.bottom + 20 : g.busY + 20,
       });
-    }));
+    })));
 
     const out = [];
 
@@ -1266,9 +1298,9 @@
             x="${cx - FEEDER_W / 2 + 8}" y="${feederY - 30}" width="${FEEDER_W - 16}" height="${busY - feederY + 20}" rx="12"/>`);
           const gen = f.kind === 'generator';
           out.push(`<g${canManage() ? ' class="hv-grab"' : ''}${fGrab}>
-            <title>${esc(f.name)}${gen ? ' · generator' : ''}${canManage() ? ' - drag left or right to move it along the busbar' : ''}</title>
+            <title>${esc(f.name)}${f.side ? ' · backs the ' + (f.side === 'r' ? 'right' : 'left') + ' of the bar' : ''}${gen ? ' · generator' : ''}${canManage() ? ' - drag left or right to move it along the busbar' : ''}</title>
             <rect x="${cx - FEEDER_W / 2 + 10}" y="${feederY - 26}" width="${FEEDER_W - 20}" height="${gen ? 56 : 46}" rx="9" fill="transparent"/>
-            <text x="${cx}" y="${gen ? feederY - 12 : feederY}" text-anchor="middle" font-size="19" font-weight="700" fill="${C.label}">${esc(f.name)}</text>
+            <text x="${cx}" y="${gen ? feederY - 12 : feederY}" text-anchor="middle" font-size="19" font-weight="700" fill="${C.label}">${esc(f.name)}${f.side ? ` <tspan font-size="15" fill="${C.bus}">(${f.side.toUpperCase()})</tspan>` : ''}</text>
             ${gen ? hvGenerator(cx, feederY + 12, C.line)
               : `<text x="${cx}" y="${feederY + 18}" text-anchor="middle" font-size="12" font-weight="600" fill="${C.muted}" letter-spacing=".8">${esc(f.voltage)}${f.source ? ' · ' + esc(f.source).toUpperCase() : ''}</text>`}
           </g>`);
@@ -1312,8 +1344,8 @@
         // that add to it.
         out.push(`<g class="${canManage() ? 'hv-node' : ''}" ${canManage() ? `data-action="hv-edit-section" data-id="${sec.id}"` : ''}>
           <title>${esc(sec.name)}${sec.feeders.length ? ' · backed by ' + esc(sec.feeders.map(f => f.name).join(', ')) : ''}${canManage() ? ' - click to rename' : ''}</title>
-          <rect x="${sg.left}" y="${busY + 8}" width="${Math.min(240, sg.width)}" height="22" fill="transparent"/>
-          <text x="${sg.left + 8}" y="${busY + 24}" font-size="12" font-weight="700" fill="${C.bus}" letter-spacing="1">${esc(sec.name.toUpperCase())}</text>
+          <rect x="${sg.left}" y="${busY - 26}" width="${Math.min(240, sg.width)}" height="20" fill="transparent"/>
+          <text x="${sg.left + 8}" y="${busY - 12}" font-size="12" font-weight="700" fill="${C.bus}" letter-spacing="1">${esc(sec.name.toUpperCase())}</text>
         </g>`);
         if (canEdit()) {
           out.push(sldPill(sg.left + sg.width - 52, busY - 26, 78, '+ Way', `data-action="hv-add-way" data-id="${sec.id}"`, C.bus, 'Add an outgoing way to ' + sec.name));
@@ -1800,6 +1832,9 @@
       ${field('Backs bus section', 'section_id', isEdit ? f.section_id : (Number(sectionId) || (secs[0] || {}).id), { type: 'select', required: true, full: true, options: secs.map(x => ({ value: x.id, label: hvSectionLabel(x) + (x.feeders.length ? ' · with ' + x.feeders.map(y => y.name).join(', ') : '') })) })}
       ${field('Incomer', 'kind', isEdit ? (f.kind || 'supply') : 'supply', { type: 'select', required: true, options: [{ value: 'supply', label: 'Incoming supply' }, { value: 'generator', label: 'Generator' }], hint: 'A generator is drawn with its own symbol.' })}
       ${field('Feeder name', 'name', isEdit ? f.name : hvNextFeederName(), { required: true, placeholder: 'F5', hint: 'Written above the incoming line.', attrs: 'style="text-transform:uppercase"' })}
+      ${lowTension ? field('Backs which end', 'side', isEdit ? (f.side || '') : 'l', { type: 'select', required: false,
+        options: [{ value: '', label: '— the whole bar —' }, { value: 'l', label: 'Left' }, { value: 'r', label: 'Right' }],
+        hint: 'Marked (L) or (R) beside the name, and the ways on that end are drawn under it.' }) : ''}
       ${isEdit ? '' : field('Lands through', 'arrangement', lowTension ? 'transformer' : 'switchgear', { type: 'select', required: true, full: true,
         options: [{ value: 'switchgear', label: 'Switchgear' }, { value: 'transformer', label: 'A transformer, then the switchgear' }],
         hint: 'A low-tension board is fed through its transformer first, so the transformer is drawn above the switchgear.' })}
@@ -1809,7 +1844,7 @@
       ${field('Source', 'source', isEdit ? f.source : '', { full: true, placeholder: 'e.g. Incoming supply 5, intake substation' })}
       ${field('Switchgear rating (A)', 'rating_a', isEdit && f.rating_a != null ? f.rating_a : '', { type: 'number', attrs: 'min="0" max="100000" step="any"', hint: 'Optional' })}`,
       async d => {
-        const body = { name: d.name, switchgear: d.switchgear === undefined ? (isEdit ? (f.switchgear || '') : '') : d.switchgear, kind: d.kind, section_id: Number(d.section_id), voltage: d.voltage, source: d.source, rating_a: d.rating_a === '' ? null : Number(d.rating_a), arrangement: d.arrangement || 'switchgear', transformer: d.transformer || '' };
+        const body = { name: d.name, switchgear: d.switchgear === undefined ? (isEdit ? (f.switchgear || '') : '') : d.switchgear, kind: d.kind, section_id: Number(d.section_id), voltage: d.voltage, source: d.source, rating_a: d.rating_a === '' ? null : Number(d.rating_a), arrangement: d.arrangement || 'switchgear', transformer: d.transformer || '', side: d.side === undefined ? (isEdit ? (f.side || '') : '') : d.side };
         if (isEdit) { state.focus = 'hv-feeder-' + f.id; await api('PUT', '/api/hv/feeders/' + f.id, body); await afterChange('Feeder updated'); }
         else { const r = await api('POST', '/api/hv/feeders', body); state.focus = 'hv-feeder-' + r.id; await afterChange('Feeder added'); }
       },
@@ -1827,6 +1862,7 @@
 
   function hvWayForm(way, sectionId) {
     const isEdit = !!(way && way.id);
+    const lowTension = ((state.hv || {}).tier === 'lt');
     const secs = hvSections();
     const boards = state.hvBoards || [];
     const parent = secs.find(x => x.id === (isEdit ? way.section_id : Number(sectionId))) || secs[0];
@@ -1843,6 +1879,9 @@
         hint: 'The section feeds this way, so every incomer on it backs the way.' })}
       ${field('Way name', 'name', isEdit ? way.name : hvNextWayName(parent), { required: true, placeholder: '22SG05' })}
       ${field('Rating (A)', 'rating_a', isEdit && way.rating_a != null ? way.rating_a : '', { type: 'number', attrs: 'min="0" max="100000" step="any"', hint: 'Optional' })}
+      ${lowTension ? field('Taps which end', 'side', isEdit ? (way.side || '') : 'l', { type: 'select', required: false,
+        options: [{ value: '', label: '— the whole bar —' }, { value: 'l', label: 'Left' }, { value: 'r', label: 'Right' }],
+        hint: 'Ways on an end are drawn along that run of the bar, clear of where the incomers land.' }) : ''}
       ${isEdit ? '' : field('At the busbar', 'head_kind', 'switchgear', { type: 'select', required: true,
         options: Object.entries(HEAD_KINDS).map(([value, label]) => ({ value, label })),
         hint: 'Switchgear is the X; a switch is the open blade.' })}
@@ -1869,6 +1908,7 @@
           dest_switchboard_id: d.dest_switchboard_id ? Number(d.dest_switchboard_id) : null,
           dest_label: d.dest_label || '', dest_detail: d.dest_detail || '', notes: d.notes || '',
           head_kind: d.head_kind || 'switchgear', chiller: d.chiller || '',
+          side: d.side === undefined ? (isEdit ? (way.side || '') : '') : d.side,
         };
         if (isEdit) { state.focus = 'hv-way-' + way.id; await api('PUT', '/api/hv/ways/' + way.id, body); await afterChange('Way updated'); }
         else { const r = await api('POST', '/api/hv/ways', body); state.focus = 'hv-way-' + r.id; await afterChange('Way added'); }
