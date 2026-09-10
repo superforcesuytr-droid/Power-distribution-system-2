@@ -1112,6 +1112,8 @@
     // How far to the left of a conductor a rotated designation is written, far
     // enough out that it never sits on the symbol it names.
     const TAG_X = 30;
+    // The step between one sideways run into a shared box and the next.
+    const ROUTE_ROW = 18;
     // Room enough that a symbol and its rotated designation never crowd the
     // next one down the conductor.
     const devHeight = d => (d.kind === 'transformer' ? 84 : (d.kind === 'chiller' ? 88 : 58));
@@ -1156,8 +1158,19 @@
     const boards = (net.switchboards || []).map(board => {
       const secs = board.sections.map(planSection);
       const contentW = secs.reduce((s, g) => s + g.width, 0) + Math.max(0, secs.length - 1) * SECTION_GAP;
-      let feederChain = 0, wayChain = 0;
+      let feederChain = 0, wayChain = 0, routeRows = 0;
       board.sections.forEach(sec => {
+        // Ways that name the same destination share a box and are run into it
+        // sideways, and each of those runs needs a level of its own above the
+        // boxes so no two lie on top of one another.
+        const seen = {};
+        sec.ways.forEach(w => {
+          const k = w.dest_switchboard_id ? 'sb:' + w.dest_switchboard_id
+            : (w.dest_board_id ? 'bd:' + w.dest_board_id
+              : ((w.dest_label || '').trim().toUpperCase() ? 'la:' + (w.dest_label || '').trim().toUpperCase() : ''));
+          if (k) seen[k] = (seen[k] || 0) + 1;
+        });
+        routeRows = Math.max(routeRows, Object.values(seen).reduce((t, n) => t + (n > 1 ? n : 0), 0));
         // An incomer is drawn from its first symbol down, so the room it needs
         // below that symbol is every symbol on it but the last.
         sec.feeders.forEach(f => {
@@ -1168,7 +1181,7 @@
         });
         sec.ways.forEach(w => { wayChain = Math.max(wayChain, chainOf(w.devices)); });
       });
-      return { board, secs, contentW, feederChain, wayChain };
+      return { board, secs, contentW, feederChain, wayChain, routeRows };
     });
 
     const contentW = boards.reduce((m, g) => Math.max(m, g.contentW), 260);
@@ -1186,7 +1199,7 @@
       g.swY = g.feederY + 78;
       g.busY = g.swY + 88 + g.feederChain;
       g.wayTapY = g.busY + 56;
-      g.destY = g.wayTapY + DEV_GAP + g.wayChain + 46;
+      g.destY = g.wayTapY + DEV_GAP + g.wayChain + 46 + g.routeRows * ROUTE_ROW;
       g.bottom = g.destY + DEST_H;
       top = g.bottom + BOARD_GAP;
       g.left = MARGIN + (W - MARGIN * 2 - g.contentW) / 2;
@@ -1411,6 +1424,18 @@
           if (box.cx - box.w / 2 < edge) box.cx = edge + box.w / 2;
           edge = box.cx + box.w / 2 + 14;
         });
+        // Where each supply enters the top of its box, and which level its run
+        // takes to get there. Levels run across the whole section, longest run
+        // highest, so the runs nest and never share a line.
+        const routed = [];
+        boxes.forEach(box => box.members.forEach((m, k) => {
+          m.enterX = box.members.length > 1
+            ? box.cx - box.w / 2 + box.w * (k + 1) / (box.members.length + 1)
+            : m.wx;
+          if (box.members.length > 1) routed.push(m);
+        }));
+        routed.sort((a, b) => Math.abs(b.wx - b.enterX) - Math.abs(a.wx - a.enterX));
+        routed.forEach((m, k) => { m.level = k; });
 
         plans.forEach(pl => {
           const { way, i, wx, down, feedsDown, across, head, headIsSwitch, chain, cy, endsAtLoad, box } = pl;
@@ -1419,8 +1444,8 @@
           // Where the conductor ends. A way sharing a box steps sideways into
           // it, so it runs down only as far as its own turn.
           const shared = !!box && box.members.length > 1;
-          const turnY = shared ? destY - 26 - pl.feed * 16 : destY;
-          const enterX = shared ? box.cx - box.w / 2 + box.w * (pl.feed + 1) / (box.members.length + 1) : wx;
+          const turnY = shared ? destY - 26 - pl.level * ROUTE_ROW : destY;
+          const enterX = shared ? pl.enterX : wx;
           const foot = feedsDown ? down.busY : (endsAtLoad ? pl.tail.y : turnY);
           const below = feedsDown || endsAtLoad;
           out.push(`<rect class="hv-col-plate${canEdit() ? ' hv-grab' : ''}"${wGrab} fill="${C.bus}" fill-opacity="0"
@@ -1451,8 +1476,8 @@
           const y = cy;
           const lastId = way.devices.length ? way.devices[way.devices.length - 1].id : headId;
           if (canEdit()) {
-            hvDrops.push({ x: wx - 46, y: (below ? y + 14 : turnY - 34), w: 92, h: 30, wayId: way.id, afterId: lastId });
-            out.push(sldPill(wx, below ? y + 29 : turnY - 26, 34, '+', `data-action="hv-add-device" data-way="${way.id}"`, C.line, 'Fit another device on this way'));
+            hvDrops.push({ x: wx - 46, y: (below || shared ? y + 14 : turnY - 34), w: 92, h: 30, wayId: way.id, afterId: lastId });
+            out.push(sldPill(wx, below || shared ? y + 29 : turnY - 26, 34, '+', `data-action="hv-add-device" data-way="${way.id}"`, C.line, 'Fit another device on this way'));
           }
 
           if (endsAtLoad) {
@@ -1491,7 +1516,7 @@
             </g>`);
           }
           if (canEdit()) {
-            const ey = below ? y + 12 : turnY - 32;
+            const ey = below || shared ? y + 12 : turnY - 32;
             out.push(`<g class="sld-btn" data-action="hv-edit-way" data-id="${way.id}"><title>Edit ${esc(way.name)}</title>
               <rect x="${wx + WAY_W / 2 - 32}" y="${ey}" width="26" height="26" rx="7" fill="#fff" stroke="${C.line}" stroke-opacity=".35"/>
               <g transform="translate(${wx + WAY_W / 2 - 29} ${ey + 3})" fill="none" stroke="${C.line}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${SLD_ICONS.edit}</g></g>`);
