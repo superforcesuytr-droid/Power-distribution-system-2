@@ -1140,12 +1140,13 @@
     const C = { bus: '#0b74c4', line: '#334155', tx: '#7c3aed', prot: '#d97a06', dest: '#0f8a4f', muted: '#94a3b8', label: '#475569' };
     const WAY_W = 182, WAY_GAP = 16, FEEDER_W = 248, SECTION_GAP = 120, MARGIN = 44, BOARD_GAP = 104;
     const STACK_GAP = 150;
-    const DEV_GAP = 64, DEST_H = 58;
+    const DEV_GAP = 64, DEST_H = 46, DEST_W = 152;
     // How far to the left of a conductor a rotated designation is written, far
     // enough out that it never sits on the symbol it names.
     const TAG_X = 30;
-    // The step between one sideways run into a shared box and the next.
-    const ROUTE_ROW = 18;
+    // The step between one sideways run into a box and the next, and how many
+    // such steps a board keeps room for above its boxes.
+    const ROUTE_ROW = 18, STEP_ROWS = 3;
     // Room enough that a symbol and its rotated designation never crowd the
     // next one down the conductor.
     const devHeight = d => (d.kind === 'transformer' ? 84 : (d.kind === 'chiller' ? 88 : 58));
@@ -1231,9 +1232,12 @@
             : ((w.dest_label || '').trim().toUpperCase() ? 'la:' + (w.dest_label || '').trim().toUpperCase() : ''));
         if (k) seen[k] = (seen[k] || 0) + 1;
       }));
-      const boxRows = Object.values(seen).reduce((t, n) => t + (n > 1 ? n : 0), 0);
-      // Room is kept above the destination boxes for the runs across to another
-      // board too, so a tap can be drawn there instead of below the sheet.
+      // Room above the boxes for the runs into them: one line per way sharing a
+      // box, and a few more for the ways whose box had to shift along the bar
+      // to clear its neighbours and so is no longer under them.
+      const boxRows = Object.values(seen).reduce((t, n) => t + (n > 1 ? n : 0), 0) + STEP_ROWS;
+      // Room is kept for the runs across to another board too, so a tap can be
+      // drawn there instead of below the sheet.
       const routeRows = boxRows + tapCount;
       let feederChain = 0, wayChain = 0;
       board.sections.forEach(sec => {
@@ -1551,32 +1555,66 @@
         pl.feed = box.members.length;
         box.members.push(pl);
       });
-      // Centre each box under the ways feeding it, then hold the boxes apart
-      // so two of them can never sit on top of one another.
+      // Each box wants to sit under the ways feeding it. Where two of them
+      // would sit on top of one another they are pushed apart and then let back
+      // towards where they belong as far as their neighbours allow, so a
+      // crowded bar moves its boxes as little as it can rather than cascading
+      // them all off to one side.
+      const BOX_GAP = 14;
       boxes.forEach(box => {
-        box.cx = box.members.reduce((t, m) => t + m.wx, 0) / box.members.length;
-        box.w = WAY_W - 12 + (box.members.length - 1) * 24;
+        box.want = box.members.reduce((t, m) => t + m.wx, 0) / box.members.length;
+        box.w = DEST_W + (box.members.length - 1) * 22;
       });
-      boxes.sort((a, b) => a.cx - b.cx);
-      let edge = -Infinity;
+      boxes.sort((a, b) => a.want - b.want);
+      // Boxes that will not fit side by side are placed as one group, and the
+      // group sits where it leaves every box in it as near its own ways as it
+      // can. A crowded stretch of bar then opens out both ways instead of
+      // cascading every box off to the right of where it belongs.
+      const groups = [];
       boxes.forEach(box => {
-        if (box.cx - box.w / 2 < edge) box.cx = edge + box.w / 2;
-        edge = box.cx + box.w / 2 + 14;
+        groups.push({ items: [box], rel: [0], sum: box.want, n: 1 });
+        for (;;) {
+          const b = groups[groups.length - 1], a = groups[groups.length - 2];
+          if (!a) break;
+          const off = a.rel[a.rel.length - 1]
+            + a.items[a.items.length - 1].w / 2 + BOX_GAP + b.items[0].w / 2;
+          if (b.sum / b.n >= a.sum / a.n + off - 0.01) break;
+          b.items.forEach((it, k) => { a.items.push(it); a.rel.push(off + b.rel[k]); });
+          a.sum += b.sum - b.n * off;
+          a.n += b.n;
+          groups.pop();
+        }
+      });
+      groups.forEach(gp => {
+        const x = gp.sum / gp.n;
+        gp.items.forEach((box, k) => { box.cx = x + gp.rel[k]; });
       });
       // Where each supply enters the top of its box, and which level its run
-      // takes to get there. Levels run across the whole board, longest run
-      // highest, so the runs nest and never share a line.
+      // takes to get there. A way whose box did not end up directly under it
+      // steps across into it rather than stopping in mid air, and every step
+      // takes a level of its own, longest run highest, so the runs nest and
+      // never share a line.
       g.plans = allPlans;
       g.boxes = boxes;
       const routed = [];
       boxes.forEach(box => box.members.forEach((m, k) => {
         m.enterX = box.members.length > 1
           ? box.cx - box.w / 2 + box.w * (k + 1) / (box.members.length + 1)
-          : m.wx;
-        if (box.members.length > 1) routed.push(m);
+          : box.cx;
+        if (Math.abs(m.enterX - m.wx) > 0.5) routed.push(m);
       }));
+      // Two runs only need lines of their own where they would lie on top of
+      // one another, so the longest takes the highest line and each of the rest
+      // takes the first line no run it crosses is already on.
       routed.sort((a, b) => Math.abs(b.wx - b.enterX) - Math.abs(a.wx - a.enterX));
-      routed.forEach((m, k) => { m.level = k; });
+      const span = m => [Math.min(m.wx, m.enterX), Math.max(m.wx, m.enterX)];
+      routed.forEach(m => {
+        const [lo, hi] = span(m);
+        let lvl = 0;
+        while (routed.some(o => o !== m && o.level === lvl
+          && span(o)[0] <= hi + BOX_GAP && span(o)[1] >= lo - BOX_GAP)) lvl++;
+        m.level = Math.min(lvl, g.boxRows - 1);
+      });
 
       // The switchboard itself: what it is and what it is rated at.
       const rating = [board.phases, board.frequency].filter(Boolean).join(', ')
@@ -1678,22 +1716,25 @@
           const { way, i, wx, down, feedsDown, across, head, headIsSwitch, chain, cy, endsAtLoad, box } = pl;
           const at = out.length;
           const wGrab = canEdit() ? ` data-drag="way" data-drag-id="${way.id}" data-drag-label="${esc(way.name)}"` : '';
-          // Where the conductor ends. A way sharing a box steps sideways into
-          // it, so it runs down only as far as its own turn.
+          // Where the conductor ends: a way whose box is not directly under it
+          // runs down only as far as its own turn, then steps across.
+          // Stepped: the box did not end up directly under this way, so the
+          // conductor turns and runs across into it at a level of its own.
+          const stepped = !!box && pl.level != null;
+          const turnY = stepped ? destY - 26 - pl.level * ROUTE_ROW : destY;
+          const enterX = stepped ? pl.enterX : wx;
           const shared = !!box && box.members.length > 1;
-          const turnY = shared ? destY - 26 - pl.level * ROUTE_ROW : destY;
-          const enterX = shared ? pl.enterX : wx;
           const foot = feedsDown ? down.busY : (endsAtLoad || pl.tappedBy ? pl.cy : turnY);
           const below = feedsDown || endsAtLoad || !!pl.tappedBy;
           out.push(`<rect class="hv-col-plate${canEdit() ? ' hv-grab' : ''}"${wGrab} fill="${C.bus}" fill-opacity="0"
-            x="${wx - WAY_W / 2 + 6}" y="${busY + 8}" width="${WAY_W - 12}" height="${(below ? foot + 30 : (shared ? turnY + 12 : destY + DEST_H)) - busY}" rx="12"/>`);
+            x="${wx - WAY_W / 2 + 6}" y="${busY + 8}" width="${WAY_W - 12}" height="${(below ? foot + 30 : (stepped ? turnY + 12 : destY + DEST_H)) - busY}" rx="12"/>`);
           const wHandle = hvHandle(wx, busY, C.bus, wGrab,
             esc(way.name) + ' - drag it anywhere along the bar');
           out.push(`<line x1="${wx}" y1="${busY}" x2="${wx}" y2="${foot}" stroke="${C.line}" stroke-width="2.5"/>`);
-          if (shared && enterX !== wx) {
+          if (stepped && enterX !== wx) {
             out.push(`<polyline points="${wx},${turnY} ${enterX},${turnY} ${enterX},${destY}" fill="none"
               stroke="${C.line}" stroke-width="2.5" stroke-linejoin="round"/>`);
-          } else if (shared) {
+          } else if (stepped) {
             out.push(`<line x1="${wx}" y1="${turnY}" x2="${wx}" y2="${destY}" stroke="${C.line}" stroke-width="2.5"/>`);
           }
 
@@ -1715,8 +1756,8 @@
           const y = cy;
           const lastId = way.devices.length ? way.devices[way.devices.length - 1].id : headId;
           if (canEdit()) {
-            hvDrops.push({ x: wx - 46, y: (below || shared ? y + 14 : turnY - 34), w: 92, h: 30, wayId: way.id, afterId: lastId });
-            out.push(sldPill(wx, below || shared ? y + 29 : turnY - 26, 34, '+', `data-action="hv-add-device" data-way="${way.id}"`, C.line, 'Fit another device on this way'));
+            hvDrops.push({ x: wx - 46, y: (below || stepped ? y + 14 : turnY - 34), w: 92, h: 30, wayId: way.id, afterId: lastId });
+            out.push(sldPill(wx, below || stepped ? y + 29 : turnY - 26, 34, '+', `data-action="hv-add-device" data-way="${way.id}"`, C.line, 'Fit another device on this way'));
           }
 
           if (endsAtLoad) {
@@ -1751,10 +1792,10 @@
             const names = box.members.map(m => m.way.name).join(', ');
             out.push(`<g class="${destAct ? 'hv-node ' : ''}${linked ? 'hv-linked' : ''}" ${destAct}${wGrab}>
               <title>${esc(label)}${shared ? ' · fed by ' + esc(names) : (way.dest_detail ? ' · ' + esc(way.dest_detail) : '')}${across ? ' on ' + esc(way.dest_network_name) + ' - click to open that drawing' : (linked ? ' - click to open this board' : (destAct ? ' - click to set where this way feeds' : ''))}</title>
-              <rect x="${box.cx - box.w / 2}" y="${destY}" width="${box.w}" height="${DEST_H}" rx="9"
-                    fill="${linked ? '#f2fbf6' : '#f8fafc'}" stroke="${dcol}" stroke-width="2.5"/>
-              <text x="${box.cx}" y="${destY + 25}" text-anchor="middle" font-size="15" font-weight="700" fill="${linked ? '#0f8a4f' : '#64748b'}">${esc(label)}</text>
-              <text x="${box.cx}" y="${destY + 43}" text-anchor="middle" font-size="10" fill="${C.muted}">${esc(sub)}</text>
+              <rect x="${box.cx - box.w / 2}" y="${destY}" width="${box.w}" height="${DEST_H}" rx="8"
+                    fill="${linked ? '#f2fbf6' : '#f8fafc'}" stroke="${dcol}" stroke-width="2"/>
+              <text x="${box.cx}" y="${destY + 20}" text-anchor="middle" font-size="13" font-weight="700" fill="${linked ? '#0f8a4f' : '#64748b'}">${esc(label)}</text>
+              <text x="${box.cx}" y="${destY + 34}" text-anchor="middle" font-size="9.5" fill="${C.muted}">${esc(sub)}</text>
             </g>`);
           }
           if (canEdit()) {
