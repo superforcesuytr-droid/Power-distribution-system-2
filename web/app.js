@@ -1140,7 +1140,7 @@
     const C = { bus: '#0b74c4', line: '#334155', tx: '#7c3aed', prot: '#d97a06', dest: '#0f8a4f', muted: '#94a3b8', label: '#475569' };
     const WAY_W = 182, WAY_GAP = 16, FEEDER_W = 248, SECTION_GAP = 120, MARGIN = 44, BOARD_GAP = 104;
     const STACK_GAP = 150;
-    const DEV_GAP = 64, DEST_H = 46, DEST_W = 152;
+    const DEV_GAP = 64, DEST_H = 44, DEST_W = 152, DEST_MIN_W = 76;
     // How far to the left of a conductor a rotated designation is written, far
     // enough out that it never sits on the symbol it names.
     const TAG_X = 30;
@@ -1150,6 +1150,12 @@
     // Room enough that a symbol and its rotated designation never crowd the
     // next one down the conductor.
     const devHeight = d => (d.kind === 'transformer' ? 84 : (d.kind === 'chiller' ? 88 : 58));
+    // What fits across a box of a given width, in the fixed-width type the
+    // drawing is set in. The whole of it is on the box's tooltip either way.
+    const fitText = (t, w, size) => {
+      const max = Math.max(3, Math.floor((w - 10) / (size * 0.62)));
+      return (t || '').length > max ? (t || '').slice(0, max - 1) + '…' : (t || '');
+    };
     // How far a chain of devices reaches below the head switchgear, which is
     // drawn on the conductor itself rather than below it.
     const chainOf = list => {
@@ -1563,9 +1569,22 @@
       const BOX_GAP = 14;
       boxes.forEach(box => {
         box.want = box.members.reduce((t, m) => t + m.wx, 0) / box.members.length;
-        box.w = DEST_W + (box.members.length - 1) * 22;
       });
       boxes.sort((a, b) => a.want - b.want);
+      // How wide each box can be and still sit under the ways feeding it: half
+      // the room to its neighbour on either side. A conductor then runs
+      // straight down into its box rather than stepping sideways to reach one
+      // that has been shoved aside, and a box only shrinks where the bar is
+      // crowded rather than every box on the board shrinking with it.
+      boxes.forEach((box, i) => {
+        const room = j => (j < 0 || j >= boxes.length ? Infinity
+          : Math.abs(boxes[j].want - box.want) - BOX_GAP);
+        const half = Math.min(DEST_W, room(i - 1), room(i + 1)) / 2;
+        box.w = Math.max(DEST_MIN_W, half * 2) + (box.members.length - 1) * 22;
+      });
+      // One size of type across the board, chosen so it fits the narrowest box.
+      const narrow = boxes.reduce((m, box) => Math.min(m, box.w), DEST_W);
+      const boxFont = narrow >= 132 ? 13 : (narrow >= 104 ? 11.5 : 10);
       // Boxes that will not fit side by side are placed as one group, and the
       // group sits where it leaves every box in it as near its own ways as it
       // can. A crowded stretch of bar then opens out both ways instead of
@@ -1794,8 +1813,8 @@
               <title>${esc(label)}${shared ? ' · fed by ' + esc(names) : (way.dest_detail ? ' · ' + esc(way.dest_detail) : '')}${across ? ' on ' + esc(way.dest_network_name) + ' - click to open that drawing' : (linked ? ' - click to open this board' : (destAct ? ' - click to set where this way feeds' : ''))}</title>
               <rect x="${box.cx - box.w / 2}" y="${destY}" width="${box.w}" height="${DEST_H}" rx="8"
                     fill="${linked ? '#f2fbf6' : '#f8fafc'}" stroke="${dcol}" stroke-width="2"/>
-              <text x="${box.cx}" y="${destY + 20}" text-anchor="middle" font-size="13" font-weight="700" fill="${linked ? '#0f8a4f' : '#64748b'}">${esc(label)}</text>
-              <text x="${box.cx}" y="${destY + 34}" text-anchor="middle" font-size="9.5" fill="${C.muted}">${esc(sub)}</text>
+              <text x="${box.cx}" y="${destY + 19}" text-anchor="middle" font-size="${boxFont}" font-weight="700" fill="${linked ? '#0f8a4f' : '#64748b'}">${esc(fitText(label, box.w, boxFont))}</text>
+              <text x="${box.cx}" y="${destY + 33}" text-anchor="middle" font-size="${boxFont - 3.5}" fill="${C.muted}">${esc(fitText(sub, box.w, boxFont - 3.5))}</text>
             </g>`);
           }
           if (canEdit()) {
