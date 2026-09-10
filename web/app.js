@@ -1139,7 +1139,14 @@
       const contentW = secs.reduce((s, g) => s + g.width, 0) + Math.max(0, secs.length - 1) * SECTION_GAP;
       let feederChain = 0, wayChain = 0;
       board.sections.forEach(sec => {
-        sec.feeders.forEach(f => { feederChain = Math.max(feederChain, chainOf(f.devices)); });
+        // An incomer is drawn from its first symbol down, so the room it needs
+        // below that symbol is every symbol on it but the last.
+        sec.feeders.forEach(f => {
+          const d = f.devices || [];
+          let h = 0;
+          for (let k = 0; k < d.length - 1; k++) h += devHeight(d[k]);
+          feederChain = Math.max(feederChain, h);
+        });
         sec.ways.forEach(w => { wayChain = Math.max(wayChain, chainOf(w.devices)); });
       });
       return { board, secs, contentW, feederChain, wayChain };
@@ -1266,28 +1273,30 @@
           const fHandle = hvHandle(cx, busY, C.bus, canManage() ? fGrab : '',
             esc(f.name) + ' - drag left or right to move this feeder along the busbar');
 
-          const fHead = (f.devices || [])[0];
-          const fHeadIsSwitch = isHead(fHead);
-          if (fHeadIsSwitch) {
-            out.push(hvDevice(cx, swY, fHead));
-          } else {
-            out.push(hvBreaker(cx, swY, C.bus));
-            out.push(hvTag(cx - 15, swY + 26, f.switchgear || f.name, C.label, 13));
-          }
           if (canManage()) {
             out.push(`<g class="sld-btn" data-action="hv-edit-feeder" data-id="${f.id}"><title>Edit feeder ${esc(f.name)}</title>
               <rect x="${cx - 68}" y="${swY - 12}" width="24" height="24" rx="7" fill="#fff" stroke="${C.bus}" stroke-opacity=".4"/>
               <g transform="translate(${cx - 66} ${swY - 10})" fill="none" stroke="${C.bus}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${SLD_ICONS.edit}</g></g>`);
           }
-          let fy = swY + DEV_GAP;
-          const fHeadId = fHeadIsSwitch ? fHead.id : 0;
-          if (canEdit()) hvDrops.push({ x: cx - 46, y: fy - 34, w: 92, h: 30, feederId: f.id, afterId: fHeadId });
-          (f.devices || []).forEach((dev, di) => {
-            if (di === 0 && isHead(dev)) return;
-            out.push(hvDevice(cx, fy, dev));
-            const h = devHeight(dev);
-            if (canEdit()) hvDrops.push({ x: cx - 46, y: fy + h - 34, w: 92, h: 30, feederId: f.id, afterId: dev.id });
-            fy += h;
+          // Whatever is on the incomer, in the order it is on it: on a
+          // high-tension board the switchgear and then anything below, on a
+          // low-tension one the transformer and then the switchgear it lands
+          // through. An incomer drawn before there were devices still gets its
+          // breaker.
+          const fDevs = f.devices || [];
+          // A low-tension incomer lands through switchgear named after the
+          // board itself, so leaving the designation blank is the normal case.
+          const fAlt = net.tier === 'lt' ? board.name : (f.switchgear || f.name);
+          if (!fDevs.length) {
+            out.push(hvBreaker(cx, swY, C.bus));
+            out.push(hvTag(cx - 15, swY + 26, f.switchgear || f.name, C.label, 13));
+            if (canEdit()) hvDrops.push({ x: cx - 46, y: swY + 24, w: 92, h: 30, feederId: f.id, afterId: 0 });
+          }
+          let fy = swY;
+          fDevs.forEach(dev => {
+            out.push(hvDevice(cx, fy, dev, isHead(dev) ? fAlt : ''));
+            fy += devHeight(dev);
+            if (canEdit()) hvDrops.push({ x: cx - 46, y: fy - 34, w: 92, h: 30, feederId: f.id, afterId: dev.id });
           });
           out.push(fHandle);
           out.push(`<g class="hv-col" data-col="feeder-${f.id}" data-home="${cx}">${out.splice(at).join('')}</g>`);
@@ -1463,7 +1472,7 @@
         font-size="${size || 12}" font-weight="700" fill="${col}" letter-spacing=".5">${esc(text)}</text>`;
     }
 
-    function hvDevice(cx, cy, d) {
+    function hvDevice(cx, cy, d, alt) {
       const g = [];
       const kind = d.kind;
       const col = kind === 'transformer' ? C.tx : (['rccb', 'elr', 'elcb'].includes(kind) ? C.prot : C.line);
@@ -1498,8 +1507,9 @@
         g.push(`<rect x="${cx - 34}" y="${cy - 15}" width="68" height="30" rx="7" fill="#fffaf0" stroke="${col}" stroke-width="2"/>
           <text x="${cx}" y="${cy + 5}" text-anchor="middle" font-size="12" font-weight="700" fill="${col}">${esc(label)}</text>`);
       }
-      if (d.name && kind !== 'chiller') g.push(hvTag(cx - 15, cy + 22, d.name, C.label, 11));
-      const title = `${label}${d.name ? ' ' + d.name : ''}${d.notes ? ' · ' + d.notes : ''}`;
+      const tag = d.name || alt || '';
+      if (tag && kind !== 'chiller') g.push(hvTag(cx - 15, cy + 22, tag, C.label, 11));
+      const title = `${label}${tag ? ' ' + tag : ''}${d.notes ? ' · ' + d.notes : ''}`;
       let inner = `<g class="${canEdit() ? 'hv-node' : ''}" ${canEdit() ? `data-action="hv-edit-device" data-id="${d.id}"` : ''}>
         <title>${esc(title)}${canEdit() ? ' - click to change or remove' : ''}</title>
         <rect x="${cx - 40}" y="${cy - 26}" width="80" height="52" fill="transparent"/>${g.join('')}</g>`;
@@ -1780,16 +1790,25 @@
   function hvFeederForm(f, sectionId) {
     const isEdit = !!(f && f.id);
     const secs = hvSections();
+    // On a low-tension board the incomer comes in through its transformer and
+    // lands on switchgear named after the board, so that is what is offered.
+    const lowTension = ((state.hv || {}).tier === 'lt');
+    const onSec = secs.find(x => x.id === (isEdit ? f.section_id : Number(sectionId))) || secs[0];
+    const boardName = ((onSec && hvBoardOfSection(onSec.id)) || {}).name || 'the switchboard';
     formModal(isEdit ? 'Edit feeder ' + f.name : 'Add feeder', `
       ${field('Backs bus section', 'section_id', isEdit ? f.section_id : (Number(sectionId) || (secs[0] || {}).id), { type: 'select', required: true, full: true, options: secs.map(x => ({ value: x.id, label: hvSectionLabel(x) + (x.feeders.length ? ' · with ' + x.feeders.map(y => y.name).join(', ') : '') })) })}
       ${field('Incomer', 'kind', isEdit ? (f.kind || 'supply') : 'supply', { type: 'select', required: true, options: [{ value: 'supply', label: 'Incoming supply' }, { value: 'generator', label: 'Generator' }], hint: 'A generator is drawn with its own symbol.' })}
       ${field('Feeder name', 'name', isEdit ? f.name : hvNextFeederName(), { required: true, placeholder: 'F5', hint: 'Written above the incoming line.', attrs: 'style="text-transform:uppercase"' })}
-      ${field('Switchgear designation', 'switchgear', isEdit ? (f.switchgear || '') : '', { placeholder: '22SGI5', hint: 'Written up the side of the breaker.', attrs: 'style="text-transform:uppercase"' })}
+      ${isEdit ? '' : field('Lands through', 'arrangement', lowTension ? 'transformer' : 'switchgear', { type: 'select', required: true, full: true,
+        options: [{ value: 'switchgear', label: 'Switchgear' }, { value: 'transformer', label: 'A transformer, then the switchgear' }],
+        hint: 'A low-tension board is fed through its transformer first, so the transformer is drawn above the switchgear.' })}
+      ${isEdit ? '' : field('Transformer designation', 'transformer', '', { placeholder: 'TX33', hint: 'Only when it lands through one.', attrs: 'style="text-transform:uppercase"' })}
+      ${field('Switchgear designation', 'switchgear', isEdit ? (f.switchgear || '') : '', { placeholder: lowTension ? esc(boardName) : '22SGI5', hint: lowTension ? 'Leave blank and it is named after the switchboard.' : 'Written up the side of the breaker.', attrs: 'style="text-transform:uppercase"' })}
       ${field('Voltage', 'voltage', isEdit ? f.voltage : (state.hv.voltage || '22kV'), { placeholder: '22kV' })}
       ${field('Source', 'source', isEdit ? f.source : '', { full: true, placeholder: 'e.g. Incoming supply 5, intake substation' })}
       ${field('Switchgear rating (A)', 'rating_a', isEdit && f.rating_a != null ? f.rating_a : '', { type: 'number', attrs: 'min="0" max="100000" step="any"', hint: 'Optional' })}`,
       async d => {
-        const body = { name: d.name, switchgear: d.switchgear, kind: d.kind, section_id: Number(d.section_id), voltage: d.voltage, source: d.source, rating_a: d.rating_a === '' ? null : Number(d.rating_a) };
+        const body = { name: d.name, switchgear: d.switchgear, kind: d.kind, section_id: Number(d.section_id), voltage: d.voltage, source: d.source, rating_a: d.rating_a === '' ? null : Number(d.rating_a), arrangement: d.arrangement || 'switchgear', transformer: d.transformer || '' };
         if (isEdit) { state.focus = 'hv-feeder-' + f.id; await api('PUT', '/api/hv/feeders/' + f.id, body); await afterChange('Feeder updated'); }
         else { const r = await api('POST', '/api/hv/feeders', body); state.focus = 'hv-feeder-' + r.id; await afterChange('Feeder added'); }
       },

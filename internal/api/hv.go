@@ -169,13 +169,17 @@ func (s *Server) handleHVNetworkDelete(w http.ResponseWriter, r *http.Request) {
 // Feeders -----------------------------------------------------------------
 
 type hvFeederInput struct {
-	Name       string   `json:"name"`
-	Switchgear string   `json:"switchgear"`
-	Kind       string   `json:"kind"`
-	SectionID  int64    `json:"section_id"`
-	Voltage    string   `json:"voltage"`
-	Source     string   `json:"source"`
-	RatingA    *float64 `json:"rating_a"`
+	Name       string `json:"name"`
+	Switchgear string `json:"switchgear"`
+	Kind       string `json:"kind"`
+	// Only read when an incomer is created: what it lands through, and the
+	// designation of the transformer when it lands through one.
+	Arrangement string   `json:"arrangement"`
+	Transformer string   `json:"transformer"`
+	SectionID   int64    `json:"section_id"`
+	Voltage     string   `json:"voltage"`
+	Source      string   `json:"source"`
+	RatingA     *float64 `json:"rating_a"`
 }
 
 func (in hvFeederInput) toModel(id, networkID int64, defVoltage string) (model.HVFeeder, error) {
@@ -237,7 +241,8 @@ func (s *Server) handleHVFeederCreate(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	id, err := s.Store.CreateHVFeeder(ctx(r), roleOf(r), f)
+	id, err := s.Store.CreateHVFeeder(ctx(r), roleOf(r), f,
+		strings.TrimSpace(in.Arrangement), strings.ToUpper(strings.TrimSpace(in.Transformer)))
 	if err != nil {
 		fail(w, err)
 		return

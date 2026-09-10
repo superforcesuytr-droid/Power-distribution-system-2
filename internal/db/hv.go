@@ -612,7 +612,10 @@ func (s *Store) DeleteHVSection(ctx context.Context, role string, id int64) erro
 
 // Feeders -----------------------------------------------------------------
 
-func (s *Store) CreateHVFeeder(ctx context.Context, role string, f model.HVFeeder) (int64, error) {
+// CreateHVFeeder adds an incomer to a bus section. Arrangement says what it
+// lands through: switchgear alone, as a high-tension board is drawn, or a
+// transformer and then the switchgear, as a low-tension board is.
+func (s *Store) CreateHVFeeder(ctx context.Context, role string, f model.HVFeeder, arrangement, transformer string) (int64, error) {
 	var id int64
 	err := s.withTx(ctx, func(tx pgx.Tx) error {
 		section := f.SectionID
@@ -627,13 +630,20 @@ func (s *Store) CreateHVFeeder(ctx context.Context, role string, f model.HVFeede
 			RETURNING id`, f.NetworkID, section, f.Name, f.Switchgear, f.Kind, f.Voltage, f.Source, f.RatingA).Scan(&id); err != nil {
 			return err
 		}
-		// A feeder is drawn from its switchgear down, so a new one starts with one.
-		name := f.Switchgear
-		if name == "" {
-			name = f.Name
+		// A feeder is drawn from its first symbol down. A low-tension board is
+		// fed through a transformer first, so that goes on ahead of the
+		// switchgear. The switchgear's designation is left as given: blank on a
+		// low-tension board means it is named after the board itself.
+		pos := 0
+		if arrangement == "transformer" {
+			if _, err := tx.Exec(ctx, `INSERT INTO hv_devices (feeder_id, kind, name, position)
+				VALUES ($1, 'transformer', $2, 0)`, id, transformer); err != nil {
+				return err
+			}
+			pos = 1
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO hv_devices (feeder_id, kind, name, rating_a, position)
-			VALUES ($1, 'switchgear', $2, $3, 0)`, id, name, f.RatingA); err != nil {
+			VALUES ($1, 'switchgear', $2, $3, $4)`, id, f.Switchgear, f.RatingA, pos); err != nil {
 			return err
 		}
 		return s.audit(ctx, tx, role, "create", "hv_feeder", id, "Added feeder "+f.Name)
