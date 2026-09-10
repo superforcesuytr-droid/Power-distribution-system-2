@@ -519,7 +519,7 @@
   // Both diagrams are one SVG with a viewBox, so scaling is a matter of the
   // width it is rendered at; the canvas around it scrolls. That keeps text
   // crisp at any zoom, which a bitmap scale would not.
-  const ZOOM_MIN = 0.25, ZOOM_MAX = 3, CANVAS_MIN_H = 360;
+  const ZOOM_MIN = 0.25, ZOOM_MAX = 3, ZOOM_FIT_MAX = 1.6, CANVAS_MIN_H = 360;
 
   function zoomBar() {
     return `<div class="zoom-bar">
@@ -553,13 +553,24 @@
     if (over > 0 && want - over >= CANVAS_MIN_H) canvas.style.height = (want - over) + 'px';
   }
 
-  // How wide the sheet is on screen, so a drawing can be set out across it
-  // rather than run off the bottom. Taken from the canvas as it stands, which
-  // is the one being redrawn; before there is one, from the window.
-  function hvSheetWidth() {
+  // How big the sheet is on screen, so a drawing can be set out to its shape
+  // rather than run off the bottom of it. Taken from the canvas as it stands,
+  // which is the one being redrawn; before there is one, from the window.
+  let hvSheetUsed = null;
+  function hvSheetSize() {
     const canvas = $('#diagram-canvas');
     const w = (canvas && canvas.clientWidth) || (window.innerWidth - 300);
-    return Math.max(960, Math.round(w) - 28);
+    const h = (canvas && canvas.clientHeight) || (window.innerHeight - 320);
+    return { w: Math.max(960, Math.round(w) - 28), h: Math.max(420, Math.round(h) - 28) };
+  }
+  // The first draw of a page has no canvas to measure and works from the
+  // window, which is a guess. Once the canvas is there the guess can be
+  // checked, and a drawing set out to the wrong shape drawn again.
+  function hvSheetStale() {
+    if (!hvSheetUsed) return false;
+    const s = hvSheetSize();
+    return Math.abs(s.w - hvSheetUsed.w) > hvSheetUsed.w * 0.08
+      || Math.abs(s.h - hvSheetUsed.h) > hvSheetUsed.h * 0.2;
   }
 
   function mountZoom(key) {
@@ -577,13 +588,21 @@
       svg.style.width = (baseW * zoom) + 'px';
       const label = $('#zoom-label', canvas.parentNode);
       if (label) label.textContent = Math.round(zoom * 100) + '%';
-      try { localStorage.setItem(store, String(zoom)); } catch (_) { /* private window */ }
+      try { localStorage.setItem(store, JSON.stringify({ z: zoom, w: baseW })); } catch (_) { /* private window */ }
     };
-    // Fit never enlarges: a diagram narrower than the canvas stays at full size.
-    const fitZoom = () => Math.min(1, Math.max(ZOOM_MIN, (canvas.clientWidth - 48) / baseW));
+    // Fit fills the canvas across, and will enlarge a small drawing rather
+    // than leave it as an island in the middle of an empty sheet.
+    const fitZoom = () => Math.min(ZOOM_FIT_MAX, Math.max(ZOOM_MIN, (canvas.clientWidth - 48) / baseW));
 
+    // The zoom is remembered per drawing, but only while the drawing is the
+    // shape it was: once it has been redrawn to a different width the old
+    // zoom means nothing, so it is fitted afresh.
     let saved = 0;
-    try { saved = Number(localStorage.getItem(store)) || 0; } catch (_) { /* ignore */ }
+    try {
+      const raw = JSON.parse(localStorage.getItem(store) || 'null');
+      const was = raw && typeof raw === 'object' ? raw : { z: Number(raw) || 0, w: baseW };
+      if (was.z && Math.abs(was.w - baseW) <= baseW * 0.12) saved = was.z;
+    } catch (_) { /* ignore */ }
     apply(saved || fitZoom());
 
     // Editing the diagram redraws it, and on a wide one that would otherwise
@@ -883,6 +902,15 @@
         ${net.section_count ? zoomBar() : ''}
         <div class="sld-canvas" id="diagram-canvas">${net.section_count ? hvSVG(net) : '<div class="empty"><h2>Nothing on the busbar yet</h2><p>Add a switchboard, then the feeders backing it and the ways tapping it.</p></div>'}</div>
       </div>`;
+    // The boards are set out to the shape of the sheet, and how big that is
+    // is only known once there is a canvas to measure. If the first draw
+    // guessed wide of it, draw once more against the real thing - before
+    // anything is mounted on the drawing, so nothing is bound twice.
+    if (net.section_count) {
+      fillCanvas();
+      const canvas = $('#diagram-canvas');
+      if (canvas && hvSheetStale()) canvas.innerHTML = hvSVG(net);
+    }
     mountZoom('hv-' + net.id);
     hvMountDrag();
     applyFocus();
@@ -1226,30 +1254,60 @@
         + Math.max(0, s.members.length - 1) * BOARD_GAP;
     });
 
-    // Fill the sheet across before going down: stacks are set out in rows as
-    // wide as the canvas on screen, and a row wraps once the next one will not
-    // fit beside it.
-    const avail = Math.max(900, hvSheetWidth() - MARGIN * 2);
-    const rows = [];
-    stacks.forEach(s => {
-      let row = rows[rows.length - 1];
-      if (!row || row.width + STACK_GAP + s.width > avail) {
-        row = { stacks: [], width: 0, height: 0 };
-        rows.push(row);
-      }
-      row.width += (row.stacks.length ? STACK_GAP : 0) + s.width;
-      row.height = Math.max(row.height, s.height);
-      row.stacks.push(s);
+    // Set the boards out to the shape of the sheet: the stacks are wrapped
+    // into rows every way they can be, and the one that covers the most of the
+    // canvas once it is scaled to fit wins. A drawing then spreads across the
+    // white space instead of running down a strip in the middle of it.
+    const sheet = hvSheetSize();
+    hvSheetUsed = sheet;
+    const pack = target => {
+      const rows = [];
+      stacks.forEach(s => {
+        let row = rows[rows.length - 1];
+        if (!row || row.width + STACK_GAP + s.width > target) {
+          row = { stacks: [], width: 0, height: 0 };
+          rows.push(row);
+        }
+        row.width += (row.stacks.length ? STACK_GAP : 0) + s.width;
+        row.height = Math.max(row.height, s.height);
+        row.stacks.push(s);
+      });
+      const W = Math.max(760, rows.reduce((m, r) => Math.max(m, r.width), 260) + MARGIN * 2);
+      const H = rows.reduce((t, r) => t + r.height, 0)
+        + Math.max(0, rows.length - 1) * BOARD_GAP + MARGIN * 2 + 16;
+      const k = Math.min(sheet.w / W, sheet.h / H, 1);
+      return { rows, W, covered: (W * k) * (H * k) / (sheet.w * sheet.h) };
+    };
+    let reach = 0;
+    let best = null;
+    stacks.forEach((s, i) => {
+      reach += (i ? STACK_GAP : 0) + s.width;
+      const p = pack(reach);
+      if (!best || p.covered > best.covered + 0.002) best = p;
     });
-    const W = Math.max(760, rows.reduce((m, r) => Math.max(m, r.width), 260) + MARGIN * 2);
+    const rows = best ? best.rows : [];
+    const W = best ? best.W : 760;
 
     // Everything is placed before anything is drawn, so a way can be run down
     // to a bus on a board that has not been drawn yet.
     let rowTop = MARGIN + 16;
+    const inner = W - MARGIN * 2;
+    // How far below the top of a row a board's busbar falls, which is more on
+    // a board whose incomers carry a long chain of symbols.
+    const headroom = g => 188 + g.feederChain;
     rows.forEach(r => {
-      let x = MARGIN + (W - MARGIN * 2 - r.width) / 2;
+      // A short row is opened out towards the width of the sheet, so it does
+      // not sit as a huddle under a wide one, but only so far: boards belong
+      // near one another rather than pushed into opposite corners.
+      const gaps = r.stacks.length - 1;
+      const extra = gaps > 0 ? Math.max(0, Math.min((inner - r.width) / gaps, STACK_GAP * 2)) : 0;
+      let x = MARGIN + (inner - r.width - extra * gaps) / 2;
+      // The busbars of the boards standing side by side are drawn on one line,
+      // as they would be set out on a sheet, so the row reads across.
+      const line = r.stacks.reduce((m, s) => Math.max(m, headroom(s.members[0])), 0);
+      let rowBottom = rowTop;
       r.stacks.forEach(s => {
-        let top = rowTop;
+        let top = rowTop + line - headroom(s.members[0]);
         s.members.forEach(g => {
           g.left = x + (s.width - g.contentW) / 2;
           g.feederY = top + 22;
@@ -1259,10 +1317,11 @@
           g.destY = g.wayTapY + DEV_GAP + g.wayChain + 46 + g.routeRows * ROUTE_ROW;
           g.bottom = g.destY + DEST_H;
           top = g.bottom + BOARD_GAP;
+          rowBottom = Math.max(rowBottom, g.bottom);
         });
-        x += s.width + STACK_GAP;
+        x += s.width + STACK_GAP + extra;
       });
-      rowTop += r.height + BOARD_GAP;
+      rowTop = rowBottom + BOARD_GAP;
     });
     const H = boards.length ? rowTop - BOARD_GAP + MARGIN : 240;
 
