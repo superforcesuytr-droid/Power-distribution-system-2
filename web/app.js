@@ -447,7 +447,7 @@
       mccb.classList.remove('collapsed');
       state.collapsed.delete(mccb.id); persistCollapsed();
     }
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
     el.classList.add('flash');
     setTimeout(() => el.classList.remove('flash'), 1700);
   }
@@ -551,6 +551,15 @@
     // not gain a scrollbar on top of the one inside the canvas.
     const over = document.documentElement.scrollHeight - window.innerHeight;
     if (over > 0 && want - over >= CANVAS_MIN_H) canvas.style.height = (want - over) + 'px';
+  }
+
+  // How wide the sheet is on screen, so a drawing can be set out across it
+  // rather than run off the bottom. Taken from the canvas as it stands, which
+  // is the one being redrawn; before there is one, from the window.
+  function hvSheetWidth() {
+    const canvas = $('#diagram-canvas');
+    const w = (canvas && canvas.clientWidth) || (window.innerWidth - 300);
+    return Math.max(960, Math.round(w) - 28);
   }
 
   function mountZoom(key) {
@@ -1102,6 +1111,7 @@
     hvDrops = [];
     const C = { bus: '#0b74c4', line: '#334155', tx: '#7c3aed', prot: '#d97a06', dest: '#0f8a4f', muted: '#94a3b8', label: '#475569' };
     const WAY_W = 182, WAY_GAP = 16, FEEDER_W = 248, SECTION_GAP = 120, MARGIN = 44, BOARD_GAP = 104;
+    const STACK_GAP = 150;
     const DEV_GAP = 64, DEST_H = 58;
     // How far to the left of a conductor a rotated designation is written, far
     // enough out that it never sits on the symbol it names.
@@ -1182,25 +1192,82 @@
       return { board, secs, contentW, feederChain, wayChain, routeRows };
     });
 
-    const contentW = boards.reduce((m, g) => Math.max(m, g.contentW), 260);
-    const W = Math.max(760, contentW + MARGIN * 2);
-
-    // Stack them, and place each board's sections and columns across its own
-    // width. Everything is placed before anything is drawn, so a way can be
-    // run down to a bus on a board that has not been drawn yet.
-    let top = MARGIN + 16;
     const boardAt = {};
     boards.forEach((g, i) => {
       g.i = i;
       boardAt[g.board.id] = g;
-      g.feederY = top + 22;
-      g.swY = g.feederY + 78;
-      g.busY = g.swY + 88 + g.feederChain;
-      g.wayTapY = g.busY + 56;
-      g.destY = g.wayTapY + DEV_GAP + g.wayChain + 46 + g.routeRows * ROUTE_ROW;
-      g.bottom = g.destY + DEST_H;
-      top = g.bottom + BOARD_GAP;
-      g.left = MARGIN + (W - MARGIN * 2 - g.contentW) / 2;
+      g.height = 22 + 78 + 88 + g.feederChain + 56 + DEV_GAP + g.wayChain + 46
+        + g.routeRows * ROUTE_ROW + DEST_H;
+    });
+
+    // Boards a way runs down into stay in one stack, one above the next,
+    // because that conductor is drawn straight down the sheet. Stacks with
+    // nothing running between them stand side by side instead, so a drawing of
+    // several boards spreads across the sheet rather than off the bottom of it.
+    const stackOf = new Map();
+    let stacks = boards.map(g => {
+      const s = { members: [g] };
+      stackOf.set(g.board.id, s);
+      return s;
+    });
+    boards.forEach(g => g.board.sections.forEach(sec => sec.ways.forEach(w => {
+      const down = w.dest_switchboard_id ? boardAt[w.dest_switchboard_id] : null;
+      if (!down || down.i <= g.i) return;
+      const a = stackOf.get(g.board.id), b = stackOf.get(down.board.id);
+      if (!a || !b || a === b) return;
+      b.members.forEach(m => stackOf.set(m.board.id, a));
+      a.members = a.members.concat(b.members).sort((x, y) => x.i - y.i);
+      b.members = [];
+    })));
+    stacks = stacks.filter(s => s.members.length);
+    stacks.forEach(s => {
+      s.width = s.members.reduce((m, g) => Math.max(m, g.contentW), 260);
+      s.height = s.members.reduce((t, g) => t + g.height, 0)
+        + Math.max(0, s.members.length - 1) * BOARD_GAP;
+    });
+
+    // Fill the sheet across before going down: stacks are set out in rows as
+    // wide as the canvas on screen, and a row wraps once the next one will not
+    // fit beside it.
+    const avail = Math.max(900, hvSheetWidth() - MARGIN * 2);
+    const rows = [];
+    stacks.forEach(s => {
+      let row = rows[rows.length - 1];
+      if (!row || row.width + STACK_GAP + s.width > avail) {
+        row = { stacks: [], width: 0, height: 0 };
+        rows.push(row);
+      }
+      row.width += (row.stacks.length ? STACK_GAP : 0) + s.width;
+      row.height = Math.max(row.height, s.height);
+      row.stacks.push(s);
+    });
+    const W = Math.max(760, rows.reduce((m, r) => Math.max(m, r.width), 260) + MARGIN * 2);
+
+    // Everything is placed before anything is drawn, so a way can be run down
+    // to a bus on a board that has not been drawn yet.
+    let rowTop = MARGIN + 16;
+    rows.forEach(r => {
+      let x = MARGIN + (W - MARGIN * 2 - r.width) / 2;
+      r.stacks.forEach(s => {
+        let top = rowTop;
+        s.members.forEach(g => {
+          g.left = x + (s.width - g.contentW) / 2;
+          g.feederY = top + 22;
+          g.swY = g.feederY + 78;
+          g.busY = g.swY + 88 + g.feederChain;
+          g.wayTapY = g.busY + 56;
+          g.destY = g.wayTapY + DEV_GAP + g.wayChain + 46 + g.routeRows * ROUTE_ROW;
+          g.bottom = g.destY + DEST_H;
+          top = g.bottom + BOARD_GAP;
+        });
+        x += s.width + STACK_GAP;
+      });
+      rowTop += r.height + BOARD_GAP;
+    });
+    const H = boards.length ? rowTop - BOARD_GAP + MARGIN : 240;
+
+    // Each board's sections and the columns along them, across its own width.
+    boards.forEach(g => {
       let x = g.left;
       g.secs.forEach(sg => {
         sg.left = x; sg.cx = x + sg.width / 2;
@@ -1242,7 +1309,6 @@
         x += sg.width + SECTION_GAP;
       });
     });
-    const H = boards.length ? boards[boards.length - 1].bottom + MARGIN : 240;
 
     // A way feeding the board below lands on the nearest length of its bus,
     // and the bus is run out to meet it the way a drawing runs it out.
@@ -1388,9 +1454,10 @@
           const gen = f.kind === 'generator';
           const fRef = hvRefFor(f.name, 'way');
           out.push(`<g${canManage() ? ' class="hv-grab"' : ''}${fGrab}${fRef ? ` data-action="hv-open-ref" data-id="${fRef.network_id}" data-ref="hv-${fRef.kind}-${fRef.id}"` : ''}>
-            <title>${esc(f.name)}${fRef ? ' · on ' + esc(fRef.network_name) + ' as a way - click to open it there' : ''}${f.side ? ' · backs the ' + (f.side === 'r' ? 'right' : 'left') + ' of the bar' : ''}${gen ? ' · generator' : ''}${canManage() ? ' - drag it anywhere along the busbar' : ''}</title>
+            <title>${esc(f.name)}${fRef ? ' · on ' + esc(fRef.network_name) + ' as a way - click to open it there'
+              : (f.name ? ' · no way of this designation on another drawing' : '')}${f.side ? ' · backs the ' + (f.side === 'r' ? 'right' : 'left') + ' of the bar' : ''}${gen ? ' · generator' : ''}${canManage() ? ' - drag it anywhere along the busbar' : ''}</title>
             <rect x="${cx - FEEDER_W / 2 + 10}" y="${feederY - 26}" width="${FEEDER_W - 20}" height="${gen ? 56 : 46}" rx="9" fill="transparent"/>
-            <text x="${cx}" y="${gen ? feederY - 12 : feederY}" text-anchor="middle" font-size="19" font-weight="700" fill="${hvRefFor(f.name, 'way') ? C.dest : C.label}">${esc(f.name)}${f.side ? ` <tspan font-size="15" fill="${C.bus}">(${f.side.toUpperCase()})</tspan>` : ''}</text>
+            <text x="${cx}" y="${gen ? feederY - 12 : feederY}" text-anchor="middle" font-size="19" font-weight="700" fill="${fRef ? C.dest : C.label}">${esc(f.name)}${f.side ? ` <tspan font-size="15" fill="${C.bus}">(${f.side.toUpperCase()})</tspan>` : ''}</text>
             ${gen ? hvGenerator(cx, feederY + 12, C.line)
               : `<text x="${cx}" y="${feederY + 18}" text-anchor="middle" font-size="12" font-weight="600" fill="${C.muted}" letter-spacing=".8">${esc(f.voltage)}${f.source ? ' · ' + esc(f.source).toUpperCase() : ''}</text>`}
           </g>`);
@@ -2176,12 +2243,16 @@
   // The same designation on another drawing: a circuit is a way where it
   // leaves one board and an incomer where it lands on the next, so one can be
   // followed to the other.
+  // Designations are typed by hand on two drawings, so they are matched on
+  // their letters and digits alone: 22SG05, 22 SG05 and 22-SG05 are one
+  // circuit, and only a real difference in the designation breaks the link.
+  const refKey = s => (s || '').toUpperCase().replace(/[^A-Z0-9]+/g, '');
   function hvRefFor(name, kind) {
-    const key = (name || '').trim().toUpperCase();
+    const key = refKey(name);
     if (!key) return null;
     const here = (state.hv || {}).id;
     return (state.hvRefs || []).find(r =>
-      r.kind === kind && r.network_id !== here && (r.name || '').trim().toUpperCase() === key) || null;
+      r.kind === kind && r.network_id !== here && refKey(r.name) === key) || null;
   }
 
   const hvBoards = () => (state.hv && state.hv.switchboards) || [];

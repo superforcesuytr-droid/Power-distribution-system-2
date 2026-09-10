@@ -352,6 +352,18 @@ rect.drop-hint { fill: rgba(11,116,196,.14); stroke: var(--primary); stroke-widt
 .tier-chip.on .tier-tag { background: rgba(255,255,255,.22); color: #fff; }
 
 rect.drop-hint.bar { fill: var(--primary); fill-opacity: .85; stroke: none; }
+/* Something jumped to from another drawing, shown where it landed. A box
+   shadow does nothing on an SVG group, so the glow is a filter and a column
+   washes its own plate. */
+g.flash { animation: hvflash 1.7s ease-out; }
+@keyframes hvflash {
+  0%   { filter: drop-shadow(0 0 9px rgba(11,116,196,.95)); }
+  65%  { filter: drop-shadow(0 0 7px rgba(11,116,196,.55)); }
+  100% { filter: drop-shadow(0 0 0 rgba(11,116,196,0)); }
+}
+g.hv-col.flash .hv-col-plate { animation: hvplateflash 1.7s ease-out; }
+@keyframes hvplateflash { 0% { fill-opacity: .3; } 100% { fill-opacity: 0; } }
+
 .hv-ref { cursor: pointer; }
 .hv-ref text { text-decoration: underline; text-underline-offset: 3px; }
 .hv-ref:hover text { fill: var(--primary); }

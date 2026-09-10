@@ -76,7 +76,9 @@ type HVCrossRef struct {
 
 // HVCrossRefs names every way and incomer on the site with the drawing and the
 // switchboard it is on, so one drawing can point at the same designation on
-// another.
+// another. A designation is sometimes written on the switchgear at the bar
+// rather than on the way itself, so those names count too and point at the
+// column carrying them.
 func (s *Store) HVCrossRefs(ctx context.Context) ([]HVCrossRef, error) {
 	pool, err := s.getPool()
 	if err != nil {
@@ -95,7 +97,25 @@ func (s *Store) HVCrossRefs(ctx context.Context) ([]HVCrossRef, error) {
 		JOIN hv_sections sec ON sec.id = f.section_id
 		JOIN hv_switchboards b ON b.id = sec.switchboard_id
 		JOIN hv_networks n ON n.id = f.network_id
-		WHERE f.name <> ''`)
+		WHERE f.name <> ''
+		UNION ALL
+		SELECT w.id, 'way', d.name, n.id, n.name, b.name
+		FROM hv_devices d
+		JOIN hv_ways w ON w.id = d.way_id
+		JOIN hv_sections sec ON sec.id = w.section_id
+		JOIN hv_switchboards b ON b.id = sec.switchboard_id
+		JOIN hv_networks n ON n.id = sec.network_id
+		WHERE d.position = 0 AND d.name <> '' AND d.name <> w.name
+		  AND d.kind IN ('switchgear', 'isolator')
+		UNION ALL
+		SELECT f.id, 'feeder', d.name, n.id, n.name, b.name
+		FROM hv_devices d
+		JOIN hv_feeders f ON f.id = d.feeder_id
+		JOIN hv_sections sec ON sec.id = f.section_id
+		JOIN hv_switchboards b ON b.id = sec.switchboard_id
+		JOIN hv_networks n ON n.id = f.network_id
+		WHERE d.position = 0 AND d.name <> '' AND d.name <> f.name
+		  AND d.kind IN ('switchgear', 'isolator')`)
 	if err != nil {
 		return nil, err
 	}
