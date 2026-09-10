@@ -1030,14 +1030,25 @@
         drag.ghost.style.left = e.clientX + 14 + 'px';
         drag.ghost.style.top = e.clientY + 14 + 'px';
       }
-      // The end of a busbar: the guide is the bar as it would be drawn.
-      if (drag.column === 'span') {
+      // Either end of a busbar: the guide is the bar as it would be drawn.
+      if (drag.column === 'span' || drag.column === 'spanL') {
         const sp = (hvLayout && hvLayout.spans || {})[drag.id];
         const at = toSvg(e.clientX, e.clientY);
         if (sp && at) {
-          drag.width = Math.max(sp.min, Math.min(40000, Math.round((at.x - sp.left) / 6) * 6));
+          let from = sp.left;
+          if (drag.column === 'span') {
+            drag.pad = sp.pad;
+            drag.width = Math.max(sp.min + sp.pad, Math.min(40000, Math.round((at.x - sp.left) / 6) * 6));
+          } else {
+            // Pulling the left-hand end out lengthens the bar at that end and
+            // leaves what is on it where it was.
+            const out = Math.round((sp.left - at.x) / 6) * 6;
+            drag.pad = Math.max(0, Math.min(38000, sp.pad + out));
+            drag.width = Math.max(sp.min + drag.pad, Math.min(40000, sp.width + (drag.pad - sp.pad)));
+            from = sp.left - (drag.pad - sp.pad);
+          }
           hint.classList.remove('bar');
-          hint.setAttribute('x', sp.left); hint.setAttribute('y', sp.busY - 4);
+          hint.setAttribute('x', from); hint.setAttribute('y', sp.busY - 4);
           hint.setAttribute('width', drag.width); hint.setAttribute('height', 8);
           hint.style.display = '';
         }
@@ -1081,15 +1092,16 @@
       hint.style.display = 'none';
       canvas.classList.remove('dropping');
       hvDragEndedAt = Date.now();
-      if (d.column === 'span') {
+      if (d.column === 'span' || d.column === 'spanL') {
         unshift();
         const sp = (hvLayout && hvLayout.spans || {})[d.id] || {};
         if (d.width == null) return;
         // Dragged back to where the bar would end on its own, it goes back to
         // finding its own length rather than being held at that one.
-        const auto = d.width <= (sp.min || 0) + 8;
+        const auto = !d.pad && d.width <= (sp.min || 0) + 8;
         try {
-          await api('POST', '/api/hv/sections/' + d.id + '/span', auto ? { auto: true } : { width: d.width });
+          await api('POST', '/api/hv/sections/' + d.id + '/span',
+            auto ? { auto: true } : { width: d.width, pad_left: d.pad || 0 });
           await afterChange(auto ? 'Busbar back to its own length' : 'Busbar run out');
         } catch (err) { toast(err.message, 'error'); }
         return;
@@ -1250,10 +1262,11 @@
       plan.autoF = plan.over.filter(f => f.offset_x == null);
       plan.autoU = plan.under.filter(f => f.offset_x == null);
       plan.autoW = sec.ways.filter(w => w.offset_x == null);
+      plan.pad = Math.max(0, Number(sec.pad_left) || 0);
       if (!sided) {
         const nf = Math.max(1, plan.autoF.length), nw = Math.max(1, plan.autoW.length + plan.autoU.length);
         plan.min = Math.max(nf * FEEDER_W, runW(nw), 420);
-        plan.width = Math.max(plan.min, Number(sec.width) || 0);
+        plan.width = Math.max(plan.min + plan.pad, Number(sec.width) || 0);
         return plan;
       }
       plan.lf = split(plan.over, 'l');
@@ -1266,7 +1279,7 @@
       plan.lwW = runW(plan.lw.filter(w => w.offset_x == null).length + plan.lu.filter(f => f.offset_x == null).length);
       plan.rwW = runW(plan.rw.filter(w => w.offset_x == null).length + plan.ru.filter(f => f.offset_x == null).length);
       plan.min = Math.max(plan.bandW + plan.lwW + plan.rwW + SIDE_PAD * 2, 420);
-      plan.width = Math.max(plan.min, Number(sec.width) || 0);
+      plan.width = Math.max(plan.min + plan.pad, Number(sec.width) || 0);
       return plan;
     };
     const boards = (net.switchboards || []).map(board => {
@@ -1444,8 +1457,13 @@
     boards.forEach(g => {
       let x = g.left;
       g.secs.forEach(sg => {
-        sg.left = x; sg.cx = x + sg.width / 2;
+        sg.left = x;
         sg.busL = sg.left; sg.busR = sg.left + sg.width;
+        // The bar can carry bare stretches at either end, run out by hand for
+        // room to put more on it. The columns are spaced inside what is left.
+        sg.inL = sg.left + (sg.pad || 0);
+        sg.inW = sg.width - (sg.pad || 0);
+        sg.cx = sg.inL + sg.inW / 2;
         // Every column's place on the bar, and the groups a column may be
         // dragged within: one group per kind on an unsided section, one per
         // kind per side on a sided one.
@@ -1486,10 +1504,10 @@
             lay(sg.under, 'feeder', '', runL + sg.autoW.length * WAY_PITCH, WAY_PITCH, WAY_W, 'below');
           }
         } else {
-          const spare = sg.width - (sg.bandW + sg.lwW + sg.rwW);
+          const spare = sg.inW - (sg.bandW + sg.lwW + sg.rwW);
           const pad = Math.max(SIDE_PAD, spare / 2);
-          const bandLeft = sg.left + sg.lwW + pad;
-          const lwL = sg.left + Math.max(0, (spare - pad * 2) / 2);
+          const bandLeft = sg.inL + sg.lwW + pad;
+          const lwL = sg.inL + Math.max(0, (spare - pad * 2) / 2);
           const rwL = bandLeft + sg.bandW + pad;
           lay(sg.lw, 'way', 'l', lwL, WAY_PITCH, WAY_W);
           lay(sg.lu, 'feeder', 'l', lwL + sg.lw.filter(w => w.offset_x == null).length * WAY_PITCH, WAY_PITCH, WAY_W, 'below');
@@ -1554,7 +1572,7 @@
     hvLayout = { groups: [], dots: {}, spans: {}, minDot: MIN_DOT };
     boards.forEach(g => g.secs.forEach(sg => {
       hvLayout.dots[sg.sec.id] = sg.dots;
-      hvLayout.spans[sg.sec.id] = { left: sg.left, width: sg.width, min: sg.min, busY: g.busY };
+      hvLayout.spans[sg.sec.id] = { left: sg.left, width: sg.width, min: sg.min, pad: sg.pad || 0, busY: g.busY };
       sg.groups.forEach(run => {
         hvLayout.groups.push({
           ...run, sectionId: sg.sec.id, name: sg.sec.name,
@@ -1731,16 +1749,19 @@
         // longer, leaving bare bar to drop more ways onto. Drag it back in and
         // the bar goes back to however long what is on it needs.
         if (canEdit()) {
-          const gx = sg.left + sg.width;
-          // Drawn after everything else on the board, so a coupler running out
-          // of the same point cannot take the pointer from it.
-          grips.push(`<g class="hv-span hv-grab" data-drag="span" data-drag-id="${sec.id}" data-drag-label="${esc(sec.name)}">
-            <title>${esc(sec.name)} - drag to run the busbar out for more ways${sg.sec.width ? ', or back in to let it find its own length' : ''}</title>
-            <rect x="${gx - 12}" y="${busY - 22}" width="30" height="44" fill="transparent"/>
-            <line x1="${gx + 5}" y1="${busY - 11}" x2="${gx + 5}" y2="${busY + 11}" stroke="${C.bus}" stroke-width="3" stroke-linecap="round"/>
-            <path d="M ${gx + 10} ${busY - 6} L ${gx + 16} ${busY} L ${gx + 10} ${busY + 6}" fill="none"
+          // A grip on each end of the bar. Drawn after everything else on the
+          // board, so a coupler running out of the same point cannot take the
+          // pointer from them.
+          const held = sg.sec.width || sg.sec.pad_left;
+          const grip = (gx, dir, kind) => `<g class="hv-span hv-grab" data-drag="${kind}" data-drag-id="${sec.id}" data-drag-label="${esc(sec.name)}">
+            <title>${esc(sec.name)} - drag to run this end of the busbar out for more ways${held ? ', or back in to let it find its own length' : ''}</title>
+            <rect x="${gx - 12 + (dir > 0 ? 0 : -6)}" y="${busY - 22}" width="30" height="44" fill="transparent"/>
+            <line x1="${gx + 5 * dir}" y1="${busY - 11}" x2="${gx + 5 * dir}" y2="${busY + 11}" stroke="${C.bus}" stroke-width="3" stroke-linecap="round"/>
+            <path d="M ${gx + 10 * dir} ${busY - 6} L ${gx + 16 * dir} ${busY} L ${gx + 10 * dir} ${busY + 6}" fill="none"
                   stroke="${C.bus}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
-          </g>`);
+          </g>`;
+          grips.push(grip(sg.left + sg.width, 1, 'span'));
+          grips.push(grip(sg.left, -1, 'spanL'));
         }
 
         // Incomers, spread across the top of the section. One fed from a way on
@@ -2761,8 +2782,8 @@
       ${isEdit ? '' : field('On switchboard', 'switchboard_id', on ? on.id : '', { type: 'select', required: true, full: true, options: boards.map(b => ({ value: b.id, label: b.name })) })}
       ${field('Section name', 'name', isEdit ? sec.name : 'Section ' + String.fromCharCode(65 + ((on && on.sections.length) || 0)), { required: true, full: true, hint: 'A length of busbar. Every feeder on it backs every way tapping it.' })}
       ${isEdit && hvPlacedOn(sec).length ? `<div class="field inline full"><input type="checkbox" name="tidy" id="sec_tidy"><label for="sec_tidy">Space every column on this bar automatically again${' · ' + plural(hvPlacedOn(sec).length, 'column')} placed by hand</label></div>` : ''}
-      ${isEdit && sec.width ? `<div class="field inline full"><input type="checkbox" name="autospan" id="sec_span"><label for="sec_span">Let this busbar find its own length again · it is held at ${Math.round(sec.width)} across</label></div>` : ''}
-      ${isEdit ? '<p class="field full hint" style="margin:0">Drag the arrow on the end of the busbar to run it out longer, for room to drop more ways on.</p>' : ''}`,
+      ${isEdit && (sec.width || sec.pad_left) ? `<div class="field inline full"><input type="checkbox" name="autospan" id="sec_span"><label for="sec_span">Let this busbar find its own length again · it is held at ${Math.round(sec.width || 0)} across${sec.pad_left ? ', ' + Math.round(sec.pad_left) + ' of it bare at the left' : ''}</label></div>` : ''}
+      ${isEdit ? '<p class="field full hint" style="margin:0">Drag the arrow on either end of the busbar to run that end out longer, for room to drop more ways on.</p>' : ''}`,
       async d => {
         if (isEdit) {
           await api('PUT', '/api/hv/sections/' + sec.id, { name: d.name });

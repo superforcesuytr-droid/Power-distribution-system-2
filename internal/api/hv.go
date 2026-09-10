@@ -974,16 +974,17 @@ func (s *Server) handleHVSectionSpan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Width *float64 `json:"width"`
-		Auto  bool     `json:"auto"`
+		Width   *float64 `json:"width"`
+		PadLeft float64  `json:"pad_left"`
+		Auto    bool     `json:"auto"`
 	}
 	if err := decode(r, &in); err != nil {
 		fail(w, err)
 		return
 	}
-	width := in.Width
+	width, pad := in.Width, in.PadLeft
 	if in.Auto {
-		width = nil
+		width, pad = nil, 0
 	} else if width == nil || *width <= 0 {
 		fail(w, &db.UserError{Msg: "A busbar needs a length to be drawn to."})
 		return
@@ -991,7 +992,11 @@ func (s *Server) handleHVSectionSpan(w http.ResponseWriter, r *http.Request) {
 		fail(w, &db.UserError{Msg: "That is longer than a busbar can be drawn."})
 		return
 	}
-	if err := s.Store.SetHVSectionWidth(ctx(r), roleOf(r), id, width); err != nil {
+	if pad < 0 || (width != nil && pad > *width) {
+		fail(w, &db.UserError{Msg: "A busbar cannot start after it ends."})
+		return
+	}
+	if err := s.Store.SetHVSectionWidth(ctx(r), roleOf(r), id, width, pad); err != nil {
 		fail(w, err)
 		return
 	}

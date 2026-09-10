@@ -233,7 +233,10 @@ type HVSection struct {
 	Position      int    `json:"position"`
 	// Width is how long the busbar is drawn, when it has been run out by hand
 	// to leave room for more ways. Null means as long as what is on it needs.
-	Width   *float64   `json:"width"`
+	Width *float64 `json:"width"`
+	// PadLeft is how much of that length is bare bar before the first column,
+	// which is what running the left-hand end out leaves behind.
+	PadLeft float64    `json:"pad_left"`
 	Feeders []HVFeeder `json:"feeders"`
 	Ways    []HVWay    `json:"ways"`
 }
