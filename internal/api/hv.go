@@ -183,6 +183,9 @@ type hvFeederInput struct {
 	Voltage   string   `json:"voltage"`
 	Source    string   `json:"source"`
 	RatingA   *float64 `json:"rating_a"`
+	// SourceWayID is the way on another switchboard this incomer taps its
+	// supply from. Zero, or absent, for a supply from off the drawing.
+	SourceWayID int64 `json:"source_way_id"`
 }
 
 func (in hvFeederInput) toModel(id, networkID int64, defVoltage string) (model.HVFeeder, error) {
@@ -195,6 +198,10 @@ func (in hvFeederInput) toModel(id, networkID int64, defVoltage string) (model.H
 		Voltage:    strings.TrimSpace(in.Voltage),
 		Source:     strings.TrimSpace(in.Source),
 		RatingA:    in.RatingA,
+	}
+	if in.SourceWayID > 0 {
+		way := in.SourceWayID
+		f.SourceWayID = &way
 	}
 	if err := required("Feeder name", f.Name); err != nil {
 		return f, err

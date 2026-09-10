@@ -232,16 +232,22 @@ func (s *Store) HVNetwork(ctx context.Context, id int64) (*model.HVNetwork, erro
 
 	var feeders []model.HVFeeder
 	feederAt := map[int64]int{}
-	rows, err := pool.Query(ctx, `SELECT id, network_id, coalesce(section_id, 0), name, switchgear, kind, side,
-		voltage, source, rating_a, position, created_at, updated_at, offset_x
-		FROM hv_feeders WHERE network_id = $1 ORDER BY position, name`, n.ID)
+	rows, err := pool.Query(ctx, `SELECT f.id, f.network_id, coalesce(f.section_id, 0), f.name, f.switchgear, f.kind, f.side,
+		f.voltage, f.source, f.rating_a, f.position, f.created_at, f.updated_at, f.offset_x,
+		f.source_way_id, coalesce(sw.name, ''), coalesce(sb.name, '')
+		FROM hv_feeders f
+		LEFT JOIN hv_ways sw ON sw.id = f.source_way_id
+		LEFT JOIN hv_sections ssec ON ssec.id = sw.section_id
+		LEFT JOIN hv_switchboards sb ON sb.id = ssec.switchboard_id
+		WHERE f.network_id = $1 ORDER BY f.position, f.name`, n.ID)
 	if err != nil {
 		return nil, err
 	}
 	for rows.Next() {
 		var f model.HVFeeder
 		if err := rows.Scan(&f.ID, &f.NetworkID, &f.SectionID, &f.Name, &f.Switchgear, &f.Kind, &f.Side,
-			&f.Voltage, &f.Source, &f.RatingA, &f.Position, &f.CreatedAt, &f.UpdatedAt, &f.OffsetX); err != nil {
+			&f.Voltage, &f.Source, &f.RatingA, &f.Position, &f.CreatedAt, &f.UpdatedAt, &f.OffsetX,
+			&f.SourceWayID, &f.SourceWayName, &f.SourceBoardName); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -694,9 +700,9 @@ func (s *Store) CreateHVFeeder(ctx context.Context, role string, f model.HVFeede
 				return err
 			}
 		}
-		if err := tx.QueryRow(ctx, `INSERT INTO hv_feeders (network_id, section_id, name, switchgear, kind, side, voltage, source, rating_a, position)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,(SELECT coalesce(max(position),-1)+1 FROM hv_feeders WHERE network_id = $1))
-			RETURNING id`, f.NetworkID, section, f.Name, f.Switchgear, f.Kind, f.Side, f.Voltage, f.Source, f.RatingA).Scan(&id); err != nil {
+		if err := tx.QueryRow(ctx, `INSERT INTO hv_feeders (network_id, section_id, name, switchgear, kind, side, voltage, source, rating_a, source_way_id, position)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,(SELECT coalesce(max(position),-1)+1 FROM hv_feeders WHERE network_id = $1))
+			RETURNING id`, f.NetworkID, section, f.Name, f.Switchgear, f.Kind, f.Side, f.Voltage, f.Source, f.RatingA, f.SourceWayID).Scan(&id); err != nil {
 			return err
 		}
 		// A feeder is drawn from its first symbol down. A low-tension board is
@@ -723,9 +729,9 @@ func (s *Store) CreateHVFeeder(ctx context.Context, role string, f model.HVFeede
 func (s *Store) UpdateHVFeeder(ctx context.Context, role string, f model.HVFeeder) error {
 	return s.withTx(ctx, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `UPDATE hv_feeders SET name = $2, switchgear = $3, kind = $4, side = $5,
-			voltage = $6, source = $7, rating_a = $8,
+			voltage = $6, source = $7, rating_a = $8, source_way_id = $10,
 			section_id = coalesce(nullif($9::bigint, 0), section_id), updated_at = now()
-			WHERE id = $1`, f.ID, f.Name, f.Switchgear, f.Kind, f.Side, f.Voltage, f.Source, f.RatingA, f.SectionID)
+			WHERE id = $1`, f.ID, f.Name, f.Switchgear, f.Kind, f.Side, f.Voltage, f.Source, f.RatingA, f.SectionID, f.SourceWayID)
 		if err != nil {
 			return err
 		}

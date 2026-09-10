@@ -264,7 +264,14 @@ type HVFeeder struct {
 	Side string `json:"side"`
 	// OffsetX is where along its bus section it sits, as a fraction of that
 	// section's width. Null when it has never been placed by hand.
-	OffsetX   *float64   `json:"offset_x"`
+	OffsetX *float64 `json:"offset_x"`
+	// SourceWayID is the way this incomer taps its supply from, when the supply
+	// comes from another switchboard on the same drawing rather than from off
+	// it. Null for an incomer fed from outside the drawing.
+	SourceWayID     *int64 `json:"source_way_id"`
+	SourceWayName   string `json:"source_way_name,omitempty"`
+	SourceBoardName string `json:"source_board_name,omitempty"`
+
 	Voltage   string     `json:"voltage"`
 	Source    string     `json:"source"`
 	RatingA   *float64   `json:"rating_a"`

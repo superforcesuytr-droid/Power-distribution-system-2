@@ -1169,23 +1169,47 @@
     const SIDE_PAD = 32;
     const runW = n => (n ? n * WAY_W + (n - 1) * WAY_GAP : 0);
     const split = (list, side) => list.filter(x => (x.side === 'r') === (side === 'r'));
+    // An incomer fed from a way on this drawing is not drawn coming in over the
+    // top of the board: it hangs under the bar like a way and runs across to
+    // the way that feeds it, the way a drawing joins two boards standing side
+    // by side. It takes its place among the ways, at the end of the run.
+    const wayAt = {};
+    const boardOfSection = {};
+    (net.switchboards || []).forEach(b => b.sections.forEach(sec => {
+      boardOfSection[sec.id] = b.id;
+      sec.ways.forEach(w => { wayAt[w.id] = w; });
+    }));
+    const sourceOf = f => (f.source_way_id && wayAt[f.source_way_id]) || null;
+    // Which boards are joined by a tap, so they can be drawn beside one another
+    // - that run goes across the sheet, not down it.
+    const tapPairs = [];
+    (net.switchboards || []).forEach(b => b.sections.forEach(sec => sec.feeders.forEach(f => {
+      const src = sourceOf(f);
+      const from = src ? boardOfSection[src.section_id] : 0;
+      if (from && from !== b.id) tapPairs.push([b.id, from]);
+    })));
     const planSection = sec => {
       const sided = sec.feeders.some(f => f.side) || sec.ways.some(w => w.side);
       const plan = { sec, sided };
-      plan.autoF = sec.feeders.filter(f => f.offset_x == null);
+      plan.over = sec.feeders.filter(f => !sourceOf(f));
+      plan.under = sec.feeders.filter(f => !!sourceOf(f));
+      plan.autoF = plan.over.filter(f => f.offset_x == null);
+      plan.autoU = plan.under.filter(f => f.offset_x == null);
       plan.autoW = sec.ways.filter(w => w.offset_x == null);
       if (!sided) {
-        const nf = Math.max(1, plan.autoF.length), nw = Math.max(1, plan.autoW.length);
+        const nf = Math.max(1, plan.autoF.length), nw = Math.max(1, plan.autoW.length + plan.autoU.length);
         plan.width = Math.max(nf * FEEDER_W, runW(nw), 420);
         return plan;
       }
-      plan.lf = split(sec.feeders, 'l');
-      plan.rf = split(sec.feeders, 'r');
+      plan.lf = split(plan.over, 'l');
+      plan.rf = split(plan.over, 'r');
       plan.lw = split(sec.ways, 'l');
       plan.rw = split(sec.ways, 'r');
+      plan.lu = split(plan.under, 'l');
+      plan.ru = split(plan.under, 'r');
       plan.bandW = Math.max(1, plan.autoF.length) * FEEDER_W;
-      plan.lwW = runW(plan.lw.filter(w => w.offset_x == null).length);
-      plan.rwW = runW(plan.rw.filter(w => w.offset_x == null).length);
+      plan.lwW = runW(plan.lw.filter(w => w.offset_x == null).length + plan.lu.filter(f => f.offset_x == null).length);
+      plan.rwW = runW(plan.rw.filter(w => w.offset_x == null).length + plan.ru.filter(f => f.offset_x == null).length);
       plan.width = Math.max(plan.bandW + plan.lwW + plan.rwW + SIDE_PAD * 2, 420);
       return plan;
     };
@@ -1210,6 +1234,7 @@
         // An incomer is drawn from its first symbol down, so the room it needs
         // below that symbol is every symbol on it but the last.
         sec.feeders.forEach(f => {
+          if (sourceOf(f)) { wayChain = Math.max(wayChain, chainOf(f.devices)); return; }
           const d = f.devices || [];
           let h = 0;
           for (let k = 0; k < d.length - 1; k++) h += devHeight(d[k]);
@@ -1254,7 +1279,28 @@
         + Math.max(0, s.members.length - 1) * BOARD_GAP;
     });
 
-    // Set the boards out to the shape of the sheet: the stacks are wrapped
+    // Boards joined by a tap are packed as one block, so a row never splits the
+    // two ends of that run.
+    const clusterOf = new Map();
+    let clusters = stacks.map(st => {
+      const c = { stacks: [st] };
+      st.members.forEach(g => clusterOf.set(g.board.id, c));
+      return c;
+    });
+    tapPairs.forEach(([aId, bId]) => {
+      const a = clusterOf.get(aId), b = clusterOf.get(bId);
+      if (!a || !b || a === b) return;
+      b.stacks.forEach(st => st.members.forEach(g => clusterOf.set(g.board.id, a)));
+      a.stacks = a.stacks.concat(b.stacks);
+      b.stacks = [];
+    });
+    clusters = clusters.filter(c => c.stacks.length);
+    clusters.forEach(c => {
+      c.width = c.stacks.reduce((t, st) => t + st.width, 0) + (c.stacks.length - 1) * STACK_GAP;
+      c.height = c.stacks.reduce((m, st) => Math.max(m, st.height), 0);
+    });
+
+    // Set the boards out to the shape of the sheet: the blocks are wrapped
     // into rows every way they can be, and the one that covers the most of the
     // canvas once it is scaled to fit wins. A drawing then spreads across the
     // white space instead of running down a strip in the middle of it.
@@ -1262,15 +1308,15 @@
     hvSheetUsed = sheet;
     const pack = target => {
       const rows = [];
-      stacks.forEach(s => {
+      clusters.forEach(c => {
         let row = rows[rows.length - 1];
-        if (!row || row.width + STACK_GAP + s.width > target) {
+        if (!row || row.width + STACK_GAP + c.width > target) {
           row = { stacks: [], width: 0, height: 0 };
           rows.push(row);
         }
-        row.width += (row.stacks.length ? STACK_GAP : 0) + s.width;
-        row.height = Math.max(row.height, s.height);
-        row.stacks.push(s);
+        row.width += (row.stacks.length ? STACK_GAP : 0) + c.width;
+        row.height = Math.max(row.height, c.height);
+        c.stacks.forEach(st => row.stacks.push(st));
       });
       const W = Math.max(760, rows.reduce((m, r) => Math.max(m, r.width), 260) + MARGIN * 2);
       const H = rows.reduce((t, r) => t + r.height, 0)
@@ -1280,8 +1326,8 @@
     };
     let reach = 0;
     let best = null;
-    stacks.forEach((s, i) => {
-      reach += (i ? STACK_GAP : 0) + s.width;
+    clusters.forEach((c, i) => {
+      reach += (i ? STACK_GAP : 0) + c.width;
       const p = pack(reach);
       if (!best || p.covered > best.covered + 0.002) best = p;
     });
@@ -1323,7 +1369,7 @@
       });
       rowTop = rowBottom + BOARD_GAP;
     });
-    const H = boards.length ? rowTop - BOARD_GAP + MARGIN : 240;
+    let H = boards.length ? rowTop - BOARD_GAP + MARGIN : 240;
 
     // Each board's sections and the columns along them, across its own width.
     boards.forEach(g => {
@@ -1334,37 +1380,48 @@
         // Every column's place on the bar, and the groups a column may be
         // dragged within: one group per kind on an unsided section, one per
         // kind per side on a sided one.
+        // A feeder and a way can carry the same number, so a column is looked
+        // up by what it is as well as by its id.
         const at = new Map();
+        const key = (kind, id) => kind + ':' + id;
         sg.groups = [];
-        const lay = (list, kind, side, start, pitch, colW) => {
+        const lay = (list, kind, side, start, pitch, colW, band) => {
           const auto = list.filter(item => item.offset_x == null);
-          auto.forEach((item, k) => at.set(item.id, start + k * pitch + colW / 2));
+          auto.forEach((item, k) => at.set(key(kind, item.id), start + k * pitch + colW / 2));
           const width = auto.length ? auto.length * pitch - (pitch - colW) : colW;
           sg.groups.push({
-            kind, side, ids: auto.map(item => item.id), left: start, width,
+            kind, side, band: band || (kind === 'way' ? 'below' : 'above'),
+            ids: auto.map(item => item.id), left: start, width,
             cx: start + width / 2, pitch, colW,
           });
         };
+        const WAY_PITCH = WAY_W + WAY_GAP;
         if (!sg.sided) {
-          const nf = sg.autoF.length, nw = sg.autoW.length;
-          lay(sg.sec.feeders, 'feeder', '', sg.cx - nf * FEEDER_W / 2, FEEDER_W, FEEDER_W);
-          lay(sg.sec.ways, 'way', '', sg.cx - runW(nw) / 2, WAY_W + WAY_GAP, WAY_W);
+          const nf = sg.autoF.length, nw = sg.autoW.length + sg.autoU.length;
+          const runL = sg.cx - runW(nw) / 2;
+          lay(sg.over, 'feeder', '', sg.cx - nf * FEEDER_W / 2, FEEDER_W, FEEDER_W);
+          lay(sg.sec.ways, 'way', '', runL, WAY_PITCH, WAY_W);
+          lay(sg.under, 'feeder', '', runL + sg.autoW.length * WAY_PITCH, WAY_PITCH, WAY_W, 'below');
         } else {
           const spare = sg.width - (sg.bandW + sg.lwW + sg.rwW);
           const pad = Math.max(SIDE_PAD, spare / 2);
           const bandLeft = sg.left + sg.lwW + pad;
-          lay(sg.lw, 'way', 'l', sg.left + Math.max(0, (spare - pad * 2) / 2), WAY_W + WAY_GAP, WAY_W);
+          const lwL = sg.left + Math.max(0, (spare - pad * 2) / 2);
+          const rwL = bandLeft + sg.bandW + pad;
+          lay(sg.lw, 'way', 'l', lwL, WAY_PITCH, WAY_W);
+          lay(sg.lu, 'feeder', 'l', lwL + sg.lw.filter(w => w.offset_x == null).length * WAY_PITCH, WAY_PITCH, WAY_W, 'below');
           lay(sg.lf, 'feeder', 'l', bandLeft, FEEDER_W, FEEDER_W);
           lay(sg.rf, 'feeder', 'r', bandLeft + sg.lf.length * FEEDER_W, FEEDER_W, FEEDER_W);
-          lay(sg.rw, 'way', 'r', bandLeft + sg.bandW + pad, WAY_W + WAY_GAP, WAY_W);
+          lay(sg.rw, 'way', 'r', rwL, WAY_PITCH, WAY_W);
+          lay(sg.ru, 'feeder', 'r', rwL + sg.rw.filter(w => w.offset_x == null).length * WAY_PITCH, WAY_PITCH, WAY_W, 'below');
         }
         // A column placed by hand sits exactly where it was put, as a fraction
         // of the section's width, and takes no slot from the rest.
         const placed = item => sg.left + Math.min(1, Math.max(0, Number(item.offset_x))) * sg.width;
-        sg.sec.feeders.forEach(f => { if (f.offset_x != null) at.set(f.id, placed(f)); });
-        sg.sec.ways.forEach(w => { if (w.offset_x != null) at.set(w.id, placed(w)); });
-        sg.feederX = sg.sec.feeders.map(f => at.get(f.id));
-        sg.wayX = sg.sec.ways.map(w => at.get(w.id));
+        sg.sec.feeders.forEach(f => { if (f.offset_x != null) at.set(key('feeder', f.id), placed(f)); });
+        sg.sec.ways.forEach(w => { if (w.offset_x != null) at.set(key('way', w.id), placed(w)); });
+        sg.feederX = sg.sec.feeders.map(f => at.get(key('feeder', f.id)));
+        sg.wayX = sg.sec.ways.map(w => at.get(key('way', w.id)));
         x += sg.width + SECTION_GAP;
       });
     });
@@ -1397,12 +1454,21 @@
       hvLayout.groups.push({
         ...run, sectionId: sg.sec.id, name: sg.sec.name,
         secLeft: sg.left, secWidth: sg.width,
-        top: run.kind === 'way' ? g.busY - 20 : g.feederY - 46,
-        bottom: run.kind === 'way' ? g.bottom + 20 : g.busY + 20,
+        top: run.band === 'below' ? g.busY - 20 : g.feederY - 46,
+        bottom: run.band === 'below' ? g.bottom + 20 : g.busY + 20,
       });
     })));
 
     const out = [];
+    // Which way each incomer on this drawing taps, and where every way ended
+    // up, so the two can be joined once both have been drawn.
+    const tappedBy = {};
+    const planIndex = {};
+    const underDrawn = [];
+    (net.switchboards || []).forEach(b => b.sections.forEach(sec => sec.feeders.forEach(f => {
+      const src = sourceOf(f);
+      if (src) tappedBy[src.id] = f;
+    })));
 
     boards.forEach(g => {
       const board = g.board;
@@ -1434,7 +1500,9 @@
         const tail = chain.length ? chain[chain.length - 1] : null;
         const endsAtLoad = !feedsDown && !!tail && tail.dev.kind === 'chiller';
         const pl = { way, i, wx: sg.wayX[i], down, feedsDown, across, head, headIsSwitch, chain, cy, tail, endsAtLoad };
+        pl.tappedBy = tappedBy[way.id] || null;
         planOf[way.id] = pl;
+        planIndex[way.id] = { pl, g };
         allPlans.push(pl);
       }));
       // Two ways that name the same destination land in the same box.
@@ -1444,7 +1512,7 @@
       const boxes = [];
       const boxByKey = {};
       allPlans.forEach(pl => {
-        if (pl.feedsDown || pl.endsAtLoad) return;
+        if (pl.feedsDown || pl.endsAtLoad || pl.tappedBy) return;
         const key = destKey(pl.way);
         let box = key ? boxByKey[key] : null;
         if (!box) {
@@ -1502,9 +1570,11 @@
         out.push(`<line x1="${sg.busL}" y1="${busY}" x2="${sg.busR}" y2="${busY}"
           stroke="${C.bus}" stroke-width="6" stroke-linecap="round"/>`);
 
-        // Incomers, spread across the top of the section.
-        const nf = sec.feeders.length;
+        // Incomers, spread across the top of the section. One fed from a way on
+        // this drawing is not among them: it hangs under the bar with the ways.
+        const nf = sg.over.length;
         sec.feeders.forEach((f, i) => {
+          if (sourceOf(f)) return;
           const cx = sg.feederX[i];
           const at = out.length;
           const fGrab = canManage() ? ` data-drag="feeder" data-drag-id="${f.id}" data-drag-label="${esc(f.name)}"` : '';
@@ -1552,7 +1622,7 @@
           out.push(fHandle);
           out.push(`<g class="hv-col" id="hv-feeder-${f.id}" data-col="feeder-${f.id}" data-home="${cx}">${out.splice(at).join('')}</g>`);
         });
-        if (!nf) {
+        if (!nf && !sg.under.length) {
           out.push(`<text x="${sg.cx}" y="${swY}" text-anchor="middle" font-size="12" fill="${C.muted}">No incoming feeder on this section</text>`);
         }
 
@@ -1584,8 +1654,8 @@
           const shared = !!box && box.members.length > 1;
           const turnY = shared ? destY - 26 - pl.level * ROUTE_ROW : destY;
           const enterX = shared ? pl.enterX : wx;
-          const foot = feedsDown ? down.busY : (endsAtLoad ? pl.tail.y : turnY);
-          const below = feedsDown || endsAtLoad;
+          const foot = feedsDown ? down.busY : (endsAtLoad || pl.tappedBy ? pl.cy : turnY);
+          const below = feedsDown || endsAtLoad || !!pl.tappedBy;
           out.push(`<rect class="hv-col-plate${canEdit() ? ' hv-grab' : ''}"${wGrab} fill="${C.bus}" fill-opacity="0"
             x="${wx - WAY_W / 2 + 6}" y="${busY + 8}" width="${WAY_W - 12}" height="${(below ? foot + 30 : (shared ? turnY + 12 : destY + DEST_H)) - busY}" rx="12"/>`);
           const wHandle = hvHandle(wx, busY, C.bus, wGrab,
@@ -1623,6 +1693,9 @@
           if (endsAtLoad) {
             // Nothing to draw: the machine at the foot of the chain is where
             // the way ends, and it carries its own name.
+          } else if (pl.tappedBy) {
+            // The run across to the incomer it feeds is drawn once both boards
+            // are placed; here the way simply ends where that run starts.
           } else if (feedsDown) {
             // It lands on the switchboard below rather than in a box, the way
             // a drawing simply runs the line onto the next bus.
@@ -1664,6 +1737,53 @@
           out.push(wHandle);
           out.push(`<g class="hv-col" id="hv-way-${way.id}" data-col="way-${way.id}" data-home="${wx}">${out.splice(at).join('')}</g>`);
         });
+
+        // An incomer fed from a way on this drawing, hanging under the bar it
+        // backs: the bar, its switchgear and whatever else is on it, and then a
+        // run across to the way that feeds it, drawn once every board is placed.
+        sec.feeders.forEach((f, i) => {
+          const src = sourceOf(f);
+          if (!src) return;
+          const cx = sg.feederX[i];
+          const at = out.length;
+          const fGrab = canManage() ? ` data-drag="feeder" data-drag-id="${f.id}" data-drag-label="${esc(f.name)}"` : '';
+          const devs = f.devices || [];
+          let fy = wayTapY;
+          const head = devs[0];
+          const headIsSwitch = isHead(head);
+          let end = wayTapY + DEV_GAP;
+          devs.forEach((dev, di) => { if (!(di === 0 && headIsSwitch)) end += devHeight(dev); });
+          out.push(`<rect class="hv-col-plate${canManage() ? ' hv-grab' : ''}"${fGrab} fill="${C.bus}" fill-opacity="0"
+            x="${cx - WAY_W / 2 + 6}" y="${busY + 8}" width="${WAY_W - 12}" height="${end + 24 - busY}" rx="12"/>`);
+          out.push(`<line x1="${cx}" y1="${busY}" x2="${cx}" y2="${end}" stroke="${C.bus}" stroke-width="3"/>`);
+          if (headIsSwitch) {
+            out.push(hvDevice(cx, wayTapY, head, f.switchgear || f.name));
+          } else {
+            out.push(hvBreaker(cx, wayTapY, C.bus));
+          }
+          fy = wayTapY + DEV_GAP;
+          if (canEdit()) hvDrops.push({ x: cx - 46, y: fy - 34, w: 92, h: 30, feederId: f.id, afterId: headIsSwitch ? head.id : 0 });
+          devs.forEach((dev, di) => {
+            if (di === 0 && headIsSwitch) return;
+            out.push(hvDevice(cx, fy, dev));
+            fy += devHeight(dev);
+            if (canEdit()) hvDrops.push({ x: cx - 46, y: fy - 34, w: 92, h: 30, feederId: f.id, afterId: dev.id });
+          });
+          out.push(`<g${canManage() ? ' class="hv-grab"' : ''}${fGrab}>
+            <title>${esc(f.name)} · fed from ${esc(f.source_way_name || src.name)}${f.source_board_name ? ' on ' + esc(f.source_board_name) : ''}${canManage() ? ' - drag it anywhere along the bar' : ''}</title>
+            <rect x="${cx - WAY_W / 2 + 8}" y="${busY + 10}" width="${WAY_W - 16}" height="46" fill="transparent"/>
+            ${hvTag(cx - TAG_X, wayTapY + 26, f.name, C.label, 13)}
+          </g>`);
+          if (canManage()) {
+            out.push(`<g class="sld-btn" data-action="hv-edit-feeder" data-id="${f.id}"><title>Edit feeder ${esc(f.name)}</title>
+              <rect x="${cx + WAY_W / 2 - 32}" y="${busY + 14}" width="26" height="26" rx="7" fill="#fff" stroke="${C.bus}" stroke-opacity=".4"/>
+              <g transform="translate(${cx + WAY_W / 2 - 29} ${busY + 17})" fill="none" stroke="${C.bus}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${SLD_ICONS.edit}</g></g>`);
+          }
+          out.push(hvHandle(cx, busY, C.bus, canManage() ? fGrab : '',
+            esc(f.name) + ' - drag it anywhere along the bar'));
+          out.push(`<g class="hv-col" id="hv-feeder-${f.id}" data-col="feeder-${f.id}" data-home="${cx}">${out.splice(at).join('')}</g>`);
+          underDrawn.push({ f, g, x: cx, foot: end, src });
+        });
       });
 
       // Couplers sit in the gap between the sections they tie.
@@ -1686,6 +1806,25 @@
           <text x="${mid}" y="${busY + 34}" text-anchor="middle" font-size="10" letter-spacing="1" fill="${c.closed ? C.prot : C.muted}">${c.closed ? 'CLOSED · TIED' : 'OPEN'}</text>
         </g>`);
       });
+    });
+
+    // The run joining an incomer to the way that feeds it. Both hang under
+    // their own bars, so the conductor drops below the boards, runs across and
+    // comes back up, the way it is drawn between two boards on a sheet. Each
+    // link takes a level of its own so two of them never lie on one line.
+    underDrawn.forEach((u, k) => {
+      const src = planIndex[u.src.id];
+      if (!src) return;
+      const y = Math.max(u.g.bottom, src.g.bottom) + 22 + k * ROUTE_ROW;
+      H = Math.max(H, y + 40);
+      const wx = src.pl.wx, wFoot = src.pl.cy;
+      out.push(`<g class="hv-node" data-action="hv-edit-feeder" data-id="${u.f.id}">
+        <title>${esc(u.f.name)} taps its supply from ${esc(u.src.name)}${u.f.source_board_name ? ' on ' + esc(u.f.source_board_name) : ''}${canManage() ? ' - click to change where it is fed from' : ''}</title>
+        <polyline points="${u.x},${u.foot} ${u.x},${y} ${wx},${y} ${wx},${wFoot}" fill="none"
+          stroke="${C.line}" stroke-width="2.5" stroke-linejoin="round"/>
+        <circle cx="${wx}" cy="${wFoot}" r="5" fill="${C.line}"/>
+        <circle cx="${u.x}" cy="${u.foot}" r="5" fill="${C.line}"/>
+      </g>`);
     });
 
     return `<svg viewBox="0 0 ${W} ${H}" width="${W}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="${esc(net.name)}">${out.join('')}</svg>`;
@@ -2063,10 +2202,13 @@
       ${lowTension ? '' : field('Switchgear designation', 'switchgear', isEdit ? (f.switchgear || '') : '', { placeholder: '22SGI5', hint: 'Written up the side of the breaker.', attrs: 'style="text-transform:uppercase"' })}
       ${field('Voltage', 'voltage', isEdit ? f.voltage : (state.hv.voltage || '22kV'), { placeholder: '22kV' })}
       ${field('Source', 'source', isEdit ? f.source : '', { full: true, placeholder: 'e.g. Incoming supply 5, intake substation' })}
+      ${field('Taps its supply from', 'source_way_id', isEdit && f.source_way_id ? f.source_way_id : '', { type: 'select', full: true,
+        options: [{ value: '', label: '— fed from off this drawing —' }].concat(hvTapSources(isEdit ? f : null, Number(sectionId) || (isEdit ? f.section_id : 0))),
+        hint: 'Naming a way on another switchboard here draws this incomer under its own bar, with the line running across to that way.' })}
       ${field('Switchgear rating (A)', 'rating_a', isEdit && f.rating_a != null ? f.rating_a : '', { type: 'number', attrs: 'min="0" max="100000" step="any"', hint: 'Optional' })}
       ${isEdit && f.offset_x != null ? `<div class="field inline full"><input type="checkbox" name="auto" id="f_auto"><label for="f_auto">Space this incomer automatically along the bar again</label></div>` : ''}`,
       async d => {
-        const body = { name: d.name, switchgear: d.switchgear === undefined ? (isEdit ? (f.switchgear || '') : '') : d.switchgear, kind: d.kind, section_id: Number(d.section_id), voltage: d.voltage, source: d.source, rating_a: d.rating_a === '' ? null : Number(d.rating_a), arrangement: d.arrangement || 'switchgear', transformer: d.transformer || '', side: d.side === undefined ? (isEdit ? (f.side || '') : '') : d.side };
+        const body = { name: d.name, switchgear: d.switchgear === undefined ? (isEdit ? (f.switchgear || '') : '') : d.switchgear, kind: d.kind, section_id: Number(d.section_id), voltage: d.voltage, source: d.source, rating_a: d.rating_a === '' ? null : Number(d.rating_a), arrangement: d.arrangement || 'switchgear', transformer: d.transformer || '', side: d.side === undefined ? (isEdit ? (f.side || '') : '') : d.side, source_way_id: Number(d.source_way_id) || 0 };
         if (isEdit) {
           state.focus = 'hv-feeder-' + f.id;
           await api('PUT', '/api/hv/feeders/' + f.id, body);
@@ -2076,6 +2218,19 @@
         else { const r = await api('POST', '/api/hv/feeders', body); state.focus = 'hv-feeder-' + r.id; await afterChange('Feeder added'); }
       },
       isEdit && canManage() ? { deleteLabel: 'Delete feeder', onDelete: () => hvDeleteFeeder(f) } : {});
+  }
+  // The ways an incomer could tap: any way on this drawing that is not on the
+  // incomer's own switchboard, since a board does not feed itself.
+  function hvTapSources(f, sectionId) {
+    const own = hvBoardOfSection(f ? f.section_id : sectionId);
+    const out = [];
+    hvBoards().forEach(b => {
+      if (own && b.id === own.id) return;
+      b.sections.forEach(sec => sec.ways.forEach(w => {
+        out.push({ value: w.id, label: b.name + ' · ' + (w.name || 'unnamed way') });
+      }));
+    });
+    return out;
   }
   function hvNextFeederName() {
     const used = new Set(hvFeeders().map(f => f.name.toUpperCase()));
