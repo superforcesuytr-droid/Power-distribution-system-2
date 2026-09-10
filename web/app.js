@@ -1183,9 +1183,12 @@
     // Which boards are joined by a tap, so they can be drawn beside one another
     // - that run goes across the sheet, not down it.
     const tapPairs = [];
+    let tapCount = 0;
     (net.switchboards || []).forEach(b => b.sections.forEach(sec => sec.feeders.forEach(f => {
       const src = sourceOf(f);
-      const from = src ? boardOfSection[src.section_id] : 0;
+      if (!src) return;
+      tapCount++;
+      const from = boardOfSection[src.section_id];
       if (from && from !== b.id) tapPairs.push([b.id, from]);
     })));
     const planSection = sec => {
@@ -1228,7 +1231,10 @@
             : ((w.dest_label || '').trim().toUpperCase() ? 'la:' + (w.dest_label || '').trim().toUpperCase() : ''));
         if (k) seen[k] = (seen[k] || 0) + 1;
       }));
-      const routeRows = Object.values(seen).reduce((t, n) => t + (n > 1 ? n : 0), 0);
+      const boxRows = Object.values(seen).reduce((t, n) => t + (n > 1 ? n : 0), 0);
+      // Room is kept above the destination boxes for the runs across to another
+      // board too, so a tap can be drawn there instead of below the sheet.
+      const routeRows = boxRows + tapCount;
       let feederChain = 0, wayChain = 0;
       board.sections.forEach(sec => {
         // An incomer is drawn from its first symbol down, so the room it needs
@@ -1242,7 +1248,7 @@
         });
         sec.ways.forEach(w => { wayChain = Math.max(wayChain, chainOf(w.devices)); });
       });
-      return { board, secs, contentW, feederChain, wayChain, routeRows };
+      return { board, secs, contentW, feederChain, wayChain, routeRows, boxRows };
     });
 
     const boardAt = {};
@@ -1351,16 +1357,23 @@
       // The busbars of the boards standing side by side are drawn on one line,
       // as they would be set out on a sheet, so the row reads across.
       const line = r.stacks.reduce((m, s) => Math.max(m, headroom(s.members[0])), 0);
+      // Their destination boxes are drawn on one line too, so a run passing
+      // from one board to the next has a level it can take across all of them.
+      const busLine = rowTop + line;
+      const destLine = r.stacks.reduce((m, s) => {
+        const g0 = s.members[0];
+        return Math.max(m, busLine + 56 + DEV_GAP + g0.wayChain + 46 + g0.routeRows * ROUTE_ROW);
+      }, 0);
       let rowBottom = rowTop;
       r.stacks.forEach(s => {
         let top = rowTop + line - headroom(s.members[0]);
-        s.members.forEach(g => {
+        s.members.forEach((g, mi) => {
           g.left = x + (s.width - g.contentW) / 2;
           g.feederY = top + 22;
           g.swY = g.feederY + 78;
           g.busY = g.swY + 88 + g.feederChain;
           g.wayTapY = g.busY + 56;
-          g.destY = g.wayTapY + DEV_GAP + g.wayChain + 46 + g.routeRows * ROUTE_ROW;
+          g.destY = mi === 0 ? destLine : g.wayTapY + DEV_GAP + g.wayChain + 46 + g.routeRows * ROUTE_ROW;
           g.bottom = g.destY + DEST_H;
           top = g.bottom + BOARD_GAP;
           rowBottom = Math.max(rowBottom, g.bottom);
@@ -1396,12 +1409,26 @@
           });
         };
         const WAY_PITCH = WAY_W + WAY_GAP;
+        // An incomer fed from another board takes the end of the bar facing
+        // that board, so the run between them is as short and as clear of the
+        // rest of the drawing as it can be.
+        const mid = g.left + g.contentW / 2;
+        const fedFromLeft = sg.under.some(f => {
+          const src = sourceOf(f);
+          const sb = src ? boardAt[boardOfSection[src.section_id]] : null;
+          return sb && sb.left + sb.contentW / 2 < mid;
+        });
         if (!sg.sided) {
           const nf = sg.autoF.length, nw = sg.autoW.length + sg.autoU.length;
           const runL = sg.cx - runW(nw) / 2;
           lay(sg.over, 'feeder', '', sg.cx - nf * FEEDER_W / 2, FEEDER_W, FEEDER_W);
-          lay(sg.sec.ways, 'way', '', runL, WAY_PITCH, WAY_W);
-          lay(sg.under, 'feeder', '', runL + sg.autoW.length * WAY_PITCH, WAY_PITCH, WAY_W, 'below');
+          if (fedFromLeft) {
+            lay(sg.under, 'feeder', '', runL, WAY_PITCH, WAY_W, 'below');
+            lay(sg.sec.ways, 'way', '', runL + sg.autoU.length * WAY_PITCH, WAY_PITCH, WAY_W);
+          } else {
+            lay(sg.sec.ways, 'way', '', runL, WAY_PITCH, WAY_W);
+            lay(sg.under, 'feeder', '', runL + sg.autoW.length * WAY_PITCH, WAY_PITCH, WAY_W, 'below');
+          }
         } else {
           const spare = sg.width - (sg.bandW + sg.lwW + sg.rwW);
           const pad = Math.max(SIDE_PAD, spare / 2);
@@ -1539,6 +1566,8 @@
       // Where each supply enters the top of its box, and which level its run
       // takes to get there. Levels run across the whole board, longest run
       // highest, so the runs nest and never share a line.
+      g.plans = allPlans;
+      g.boxes = boxes;
       const routed = [];
       boxes.forEach(box => box.members.forEach((m, k) => {
         m.enterX = box.members.length > 1
@@ -1756,10 +1785,13 @@
           out.push(`<rect class="hv-col-plate${canManage() ? ' hv-grab' : ''}"${fGrab} fill="${C.bus}" fill-opacity="0"
             x="${cx - WAY_W / 2 + 6}" y="${busY + 8}" width="${WAY_W - 12}" height="${end + 24 - busY}" rx="12"/>`);
           out.push(`<line x1="${cx}" y1="${busY}" x2="${cx}" y2="${end}" stroke="${C.bus}" stroke-width="3"/>`);
+          // The switchgear at the bar carries the designation, as it does on a
+          // way; only an incomer drawn before there were devices needs its own.
           if (headIsSwitch) {
             out.push(hvDevice(cx, wayTapY, head, f.switchgear || f.name));
           } else {
             out.push(hvBreaker(cx, wayTapY, C.bus));
+            out.push(hvTag(cx - TAG_X, wayTapY + 26, f.switchgear || f.name, C.label, 13));
           }
           fy = wayTapY + DEV_GAP;
           if (canEdit()) hvDrops.push({ x: cx - 46, y: fy - 34, w: 92, h: 30, feederId: f.id, afterId: headIsSwitch ? head.id : 0 });
@@ -1772,7 +1804,6 @@
           out.push(`<g${canManage() ? ' class="hv-grab"' : ''}${fGrab}>
             <title>${esc(f.name)} · fed from ${esc(f.source_way_name || src.name)}${f.source_board_name ? ' on ' + esc(f.source_board_name) : ''}${canManage() ? ' - drag it anywhere along the bar' : ''}</title>
             <rect x="${cx - WAY_W / 2 + 8}" y="${busY + 10}" width="${WAY_W - 16}" height="46" fill="transparent"/>
-            ${hvTag(cx - TAG_X, wayTapY + 26, f.name, C.label, 13)}
           </g>`);
           if (canManage()) {
             out.push(`<g class="sld-btn" data-action="hv-edit-feeder" data-id="${f.id}"><title>Edit feeder ${esc(f.name)}</title>
@@ -1809,16 +1840,56 @@
     });
 
     // The run joining an incomer to the way that feeds it. Both hang under
-    // their own bars, so the conductor drops below the boards, runs across and
-    // comes back up, the way it is drawn between two boards on a sheet. Each
-    // link takes a level of its own so two of them never lie on one line.
+    // their own bars, so the conductor drops, runs across and comes back up,
+    // the way it is drawn between two boards on a sheet. It is kept as shallow
+    // as it can be - just under the two ends it joins - and pushed down only by
+    // what actually stands between them, so it neither dives to the foot of the
+    // sheet nor cuts through a symbol on the way. Each link takes a level of
+    // its own so two of them never lie on one line. They are drawn first, and
+    // so behind the boards, because a conductor passing a board belongs under
+    // it rather than over it.
+    const links = [];
+    underDrawn.forEach(u => { (u.g.unders = u.g.unders || []).push(u); });
     underDrawn.forEach((u, k) => {
       const src = planIndex[u.src.id];
       if (!src) return;
-      const y = Math.max(u.g.bottom, src.g.bottom) + 22 + k * ROUTE_ROW;
-      H = Math.max(H, y + 40);
       const wx = src.pl.wx, wFoot = src.pl.cy;
-      out.push(`<g class="hv-node" data-action="hv-edit-feeder" data-id="${u.f.id}">
+      const lo = Math.min(u.x, wx) - 24, hi = Math.max(u.x, wx) + 24;
+      // What the run would have to get past: how far the symbols hanging in its
+      // way reach, how far the boards themselves reach, and how low the topmost
+      // destination box sits on any board it crosses.
+      let chains = Math.max(u.foot, wFoot), all = chains, top = Infinity, rows = 0;
+      boards.forEach(bg => {
+        // Only what stands on the same line as the two ends is in the way: a
+        // board on another row of the sheet is nowhere near this run.
+        if (Math.abs(bg.busY - u.g.busY) > 2 && Math.abs(bg.busY - src.g.busY) > 2) return;
+        let crosses = false;
+        (bg.plans || []).forEach(pl => {
+          if (pl.feedsDown || pl.wx < lo || pl.wx > hi) return;
+          crosses = true;
+          chains = Math.max(chains, pl.cy);
+          all = Math.max(all, pl.box ? bg.destY + DEST_H : pl.cy);
+        });
+        (bg.boxes || []).forEach(bx => {
+          if (bx.cx + bx.w / 2 < lo || bx.cx - bx.w / 2 > hi) return;
+          crosses = true;
+          all = Math.max(all, bg.destY + DEST_H);
+        });
+        (bg.unders || []).forEach(f => {
+          if (f.x < lo || f.x > hi) return;
+          crosses = true;
+          chains = Math.max(chains, f.foot);
+          all = Math.max(all, f.foot);
+        });
+        if (crosses) { top = Math.min(top, bg.destY); rows = Math.max(rows, bg.boxRows); }
+      });
+      // Above the destination boxes if it fits between them and the symbols
+      // hanging above them - a drawing runs it there, crossing only conductors.
+      // Under everything if it does not.
+      const above = top - 26 - (rows + k) * ROUTE_ROW;
+      const y = above > chains + 20 ? above : all + 30 + k * ROUTE_ROW;
+      H = Math.max(H, y + 40);
+      links.push(`<g class="hv-node" data-action="hv-edit-feeder" data-id="${u.f.id}">
         <title>${esc(u.f.name)} taps its supply from ${esc(u.src.name)}${u.f.source_board_name ? ' on ' + esc(u.f.source_board_name) : ''}${canManage() ? ' - click to change where it is fed from' : ''}</title>
         <polyline points="${u.x},${u.foot} ${u.x},${y} ${wx},${y} ${wx},${wFoot}" fill="none"
           stroke="${C.line}" stroke-width="2.5" stroke-linejoin="round"/>
@@ -1826,6 +1897,7 @@
         <circle cx="${u.x}" cy="${u.foot}" r="5" fill="${C.line}"/>
       </g>`);
     });
+    out.unshift(links.join(''));
 
     return `<svg viewBox="0 0 ${W} ${H}" width="${W}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="${esc(net.name)}">${out.join('')}</svg>`;
 

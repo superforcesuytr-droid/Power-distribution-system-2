@@ -3,7 +3,7 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS  = -s -w -X main.version=$(VERSION)
 
-.PHONY: run dev test windows macos linux winres clean
+.PHONY: run dev test windows macos linux winres update clean
 
 run:            ## Run locally in browser mode (set DATABASE_URL or use the setup screen)
 	go run ./cmd/pds --browser
@@ -27,6 +27,9 @@ linux:
 
 winres:         ## Regenerate the Windows icon/version resources (cmd/pds/*.syso)
 	cd build/winres && go run github.com/tc-hib/go-winres@v0.3.3 make --in winres.json --out ../../cmd/pds/rsrc
+
+update:         ## Mac: pull the latest code, rebuild the app and put it in /Applications
+	build/update-macos.sh $(VERSION)
 
 clean:
 	rm -rf dist
