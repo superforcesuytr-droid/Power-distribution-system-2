@@ -34,7 +34,7 @@
     const n = Number(v) || 0;
     return Number.isInteger(n) ? String(n) : n.toFixed(1).replace(/\.0$/, '');
   }
-  function plural(n, word) { return n + ' ' + word + (n === 1 ? '' : 's'); }
+  function plural(n, word, many) { return n + ' ' + (n === 1 ? word : (many || word + 's')); }
   function fmtDate(d) {
     return new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
   }
@@ -1359,19 +1359,14 @@
         if (!nw) {
           out.push(`<text x="${sg.cx}" y="${busY + 46}" text-anchor="middle" font-size="12" fill="${C.muted}">No outgoing ways on this section yet</text>`);
         }
-        sec.ways.forEach((way, i) => {
-          const wx = sg.wayX[i];
-          const at = out.length;
-          const wGrab = canEdit() ? ` data-drag="way" data-drag-id="${way.id}" data-drag-label="${esc(way.name)}"` : '';
-          // Where the conductor ends: a switchboard below takes it on down to
-          // its own bus, otherwise it stops at the destination box.
-          // A board on this drawing is run down to; one on another drawing has
-          // no line to draw, so the destination box links across to it instead.
+        // Worked out before anything is drawn: where each way's chain of
+        // symbols sits, where its conductor ends, and which ways feed the same
+        // thing. A board fed from both ends of the bar has a supply from each,
+        // and a drawing runs both of them into one box.
+        const plans = sec.ways.map((way, i) => {
           const down = way.dest_switchboard_id ? boardAt[way.dest_switchboard_id] : null;
           const feedsDown = !!(down && down.i > g.i);
           const across = !down && !!way.dest_switchboard_id && !!way.dest_network_id;
-          // Where each device on the chain sits, worked out before anything is
-          // drawn so the conductor knows where to stop.
           const head = way.devices[0];
           const headIsSwitch = isHead(head);
           const chain = [];
@@ -1381,17 +1376,64 @@
             chain.push({ dev, y: cy });
             cy += devHeight(dev);
           });
-          // A chiller is the load itself, so the conductor runs into it and
-          // there is nothing below to put in a destination box.
           const tail = chain.length ? chain[chain.length - 1] : null;
           const endsAtLoad = !feedsDown && !!tail && tail.dev.kind === 'chiller';
-          const foot = feedsDown ? down.busY : (endsAtLoad ? tail.y : destY);
+          return { way, i, wx: sg.wayX[i], down, feedsDown, across, head, headIsSwitch, chain, cy, tail, endsAtLoad };
+        });
+        // Two ways that name the same destination land in the same box.
+        const destKey = w => (w.dest_switchboard_id ? 'sb:' + w.dest_switchboard_id
+          : (w.dest_board_id ? 'bd:' + w.dest_board_id
+            : ((w.dest_label || '').trim().toUpperCase() ? 'la:' + (w.dest_label || '').trim().toUpperCase() : '')));
+        const boxes = [];
+        const boxByKey = {};
+        plans.forEach(pl => {
+          if (pl.feedsDown || pl.endsAtLoad) return;
+          const key = destKey(pl.way);
+          let box = key ? boxByKey[key] : null;
+          if (!box) {
+            box = { members: [], w: WAY_W - 12 };
+            boxes.push(box);
+            if (key) boxByKey[key] = box;
+          }
+          pl.box = box;
+          pl.feed = box.members.length;
+          box.members.push(pl);
+        });
+        // Centre each box under the ways feeding it, then hold the boxes apart
+        // so two of them can never sit on top of one another.
+        boxes.forEach(box => {
+          box.cx = box.members.reduce((t, m) => t + m.wx, 0) / box.members.length;
+          box.w = WAY_W - 12 + (box.members.length - 1) * 24;
+        });
+        boxes.sort((a, b) => a.cx - b.cx);
+        let edge = -Infinity;
+        boxes.forEach(box => {
+          if (box.cx - box.w / 2 < edge) box.cx = edge + box.w / 2;
+          edge = box.cx + box.w / 2 + 14;
+        });
+
+        plans.forEach(pl => {
+          const { way, i, wx, down, feedsDown, across, head, headIsSwitch, chain, cy, endsAtLoad, box } = pl;
+          const at = out.length;
+          const wGrab = canEdit() ? ` data-drag="way" data-drag-id="${way.id}" data-drag-label="${esc(way.name)}"` : '';
+          // Where the conductor ends. A way sharing a box steps sideways into
+          // it, so it runs down only as far as its own turn.
+          const shared = !!box && box.members.length > 1;
+          const turnY = shared ? destY - 26 - pl.feed * 16 : destY;
+          const enterX = shared ? box.cx - box.w / 2 + box.w * (pl.feed + 1) / (box.members.length + 1) : wx;
+          const foot = feedsDown ? down.busY : (endsAtLoad ? pl.tail.y : turnY);
           const below = feedsDown || endsAtLoad;
           out.push(`<rect class="hv-col-plate${canEdit() ? ' hv-grab' : ''}"${wGrab} fill="${C.bus}" fill-opacity="0"
-            x="${wx - WAY_W / 2 + 6}" y="${busY + 8}" width="${WAY_W - 12}" height="${(below ? foot + 30 : destY + DEST_H) - busY}" rx="12"/>`);
+            x="${wx - WAY_W / 2 + 6}" y="${busY + 8}" width="${WAY_W - 12}" height="${(below ? foot + 30 : (shared ? turnY + 12 : destY + DEST_H)) - busY}" rx="12"/>`);
           const wHandle = hvHandle(wx, busY, C.bus, wGrab,
             esc(way.name) + ' - drag left or right to move this way along the bar');
           out.push(`<line x1="${wx}" y1="${busY}" x2="${wx}" y2="${foot}" stroke="${C.line}" stroke-width="2.5"/>`);
+          if (shared && enterX !== wx) {
+            out.push(`<polyline points="${wx},${turnY} ${enterX},${turnY} ${enterX},${destY}" fill="none"
+              stroke="${C.line}" stroke-width="2.5" stroke-linejoin="round"/>`);
+          } else if (shared) {
+            out.push(`<line x1="${wx}" y1="${turnY}" x2="${wx}" y2="${destY}" stroke="${C.line}" stroke-width="2.5"/>`);
+          }
 
           if (headIsSwitch) {
             out.push(hvDevice(wx, wayTapY, head));
@@ -1409,8 +1451,8 @@
           const y = cy;
           const lastId = way.devices.length ? way.devices[way.devices.length - 1].id : headId;
           if (canEdit()) {
-            hvDrops.push({ x: wx - 46, y: (below ? y + 14 : destY - 34), w: 92, h: 30, wayId: way.id, afterId: lastId });
-            out.push(sldPill(wx, below ? y + 29 : destY - 26, 34, '+', `data-action="hv-add-device" data-way="${way.id}"`, C.line, 'Fit another device on this way'));
+            hvDrops.push({ x: wx - 46, y: (below ? y + 14 : turnY - 34), w: 92, h: 30, wayId: way.id, afterId: lastId });
+            out.push(sldPill(wx, below ? y + 29 : turnY - 26, 34, '+', `data-action="hv-add-device" data-way="${way.id}"`, C.line, 'Fit another device on this way'));
           }
 
           if (endsAtLoad) {
@@ -1424,28 +1466,32 @@
               <rect x="${wx - 22}" y="${foot - 30}" width="44" height="52" fill="transparent"/>
               <circle cx="${wx}" cy="${foot}" r="6" fill="${C.bus}"/>
             </g>`);
-          } else {
-            // The destination box: what this way actually feeds.
+          } else if (pl.feed === 0) {
+            // The destination box: what this way actually feeds. Where more
+            // than one way feeds it, the first of them draws the one box and
+            // the rest step into it.
             const linked = !!way.dest_board_id || across;
             const dcol = linked ? C.dest : C.muted;
             const label = across ? way.dest_switchboard_name : (way.dest_label || way.dest_board_code || 'Not assigned');
-            const sub = across ? (way.dest_detail || way.dest_network_name)
+            const fed = shared ? plural(box.members.length, 'supply', 'supplies') : '';
+            const sub = fed || (across ? (way.dest_detail || way.dest_network_name)
               : (way.dest_detail
                 || (linked ? (way.dest_building_name || 'Open on the dashboard')
-                  : (way.dest_label ? 'External' : 'Set a destination')));
+                  : (way.dest_label ? 'External' : 'Set a destination'))));
             const destAct = across ? `data-action="hv-open-drawing" data-id="${way.dest_network_id}" data-board="${way.dest_switchboard_id}"`
               : (way.dest_board_id ? `data-action="hv-open-dest" data-id="${way.dest_board_id}"`
                 : (canEdit() ? `data-action="hv-edit-way" data-id="${way.id}"` : ''));
+            const names = box.members.map(m => m.way.name).join(', ');
             out.push(`<g class="${destAct ? 'hv-node ' : ''}${linked ? 'hv-linked' : ''}" id="hv-way-${way.id}" ${destAct}${wGrab}>
-              <title>${esc(label)}${way.dest_detail ? ' · ' + esc(way.dest_detail) : ''}${across ? ' on ' + esc(way.dest_network_name) + ' - click to open that drawing' : (linked ? ' - click to open this board' : (destAct ? ' - click to set where this way feeds' : ''))}</title>
-              <rect x="${wx - WAY_W / 2 + 6}" y="${destY}" width="${WAY_W - 12}" height="${DEST_H}" rx="9"
+              <title>${esc(label)}${shared ? ' · fed by ' + esc(names) : (way.dest_detail ? ' · ' + esc(way.dest_detail) : '')}${across ? ' on ' + esc(way.dest_network_name) + ' - click to open that drawing' : (linked ? ' - click to open this board' : (destAct ? ' - click to set where this way feeds' : ''))}</title>
+              <rect x="${box.cx - box.w / 2}" y="${destY}" width="${box.w}" height="${DEST_H}" rx="9"
                     fill="${linked ? '#f2fbf6' : '#f8fafc'}" stroke="${dcol}" stroke-width="2.5"/>
-              <text x="${wx}" y="${destY + 25}" text-anchor="middle" font-size="15" font-weight="700" fill="${linked ? '#0f8a4f' : '#64748b'}">${esc(label)}</text>
-              <text x="${wx}" y="${destY + 43}" text-anchor="middle" font-size="10" fill="${C.muted}">${esc(sub)}</text>
+              <text x="${box.cx}" y="${destY + 25}" text-anchor="middle" font-size="15" font-weight="700" fill="${linked ? '#0f8a4f' : '#64748b'}">${esc(label)}</text>
+              <text x="${box.cx}" y="${destY + 43}" text-anchor="middle" font-size="10" fill="${C.muted}">${esc(sub)}</text>
             </g>`);
           }
           if (canEdit()) {
-            const ey = below ? y + 12 : destY - 32;
+            const ey = below ? y + 12 : turnY - 32;
             out.push(`<g class="sld-btn" data-action="hv-edit-way" data-id="${way.id}"><title>Edit ${esc(way.name)}</title>
               <rect x="${wx + WAY_W / 2 - 32}" y="${ey}" width="26" height="26" rx="7" fill="#fff" stroke="${C.line}" stroke-opacity=".35"/>
               <g transform="translate(${wx + WAY_W / 2 - 29} ${ey + 3})" fill="none" stroke="${C.line}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${SLD_ICONS.edit}</g></g>`);
