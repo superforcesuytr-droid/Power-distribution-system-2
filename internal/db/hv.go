@@ -62,6 +62,55 @@ func (s *Store) HVSwitchboardList(ctx context.Context) ([]model.HVSwitchboard, e
 	return out, rows.Err()
 }
 
+// HVCrossRef is one designation on a drawing that another drawing may name
+// too: the same circuit is a way where it leaves one board and an incomer
+// where it lands on the next.
+type HVCrossRef struct {
+	ID          int64  `json:"id"`
+	Kind        string `json:"kind"`
+	Name        string `json:"name"`
+	NetworkID   int64  `json:"network_id"`
+	NetworkName string `json:"network_name"`
+	BoardName   string `json:"board_name"`
+}
+
+// HVCrossRefs names every way and incomer on the site with the drawing and the
+// switchboard it is on, so one drawing can point at the same designation on
+// another.
+func (s *Store) HVCrossRefs(ctx context.Context) ([]HVCrossRef, error) {
+	pool, err := s.getPool()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := pool.Query(ctx, `
+		SELECT w.id, 'way', w.name, n.id, n.name, b.name
+		FROM hv_ways w
+		JOIN hv_sections sec ON sec.id = w.section_id
+		JOIN hv_switchboards b ON b.id = sec.switchboard_id
+		JOIN hv_networks n ON n.id = sec.network_id
+		WHERE w.name <> ''
+		UNION ALL
+		SELECT f.id, 'feeder', f.name, n.id, n.name, b.name
+		FROM hv_feeders f
+		JOIN hv_sections sec ON sec.id = f.section_id
+		JOIN hv_switchboards b ON b.id = sec.switchboard_id
+		JOIN hv_networks n ON n.id = f.network_id
+		WHERE f.name <> ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []HVCrossRef{}
+	for rows.Next() {
+		var r HVCrossRef
+		if err := rows.Scan(&r.ID, &r.Kind, &r.Name, &r.NetworkID, &r.NetworkName, &r.BoardName); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // NetworkOfSection says which drawing a bus section belongs to, so a feeder or
 // a way added to it lands on the same one.
 func (s *Store) NetworkOfSection(ctx context.Context, sectionID int64) (int64, error) {

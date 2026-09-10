@@ -17,6 +17,7 @@ func (s *Server) routesHV(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/hv", s.requireRole(model.RoleSupervisor, s.handleHVUpdate))
 	mux.HandleFunc("GET /api/hv/networks", s.handleHVNetworks)
 	mux.HandleFunc("GET /api/hv/switchboards", s.handleHVBoardList)
+	mux.HandleFunc("GET /api/hv/refs", s.handleHVRefs)
 	mux.HandleFunc("POST /api/hv/networks", s.requireRole(model.RoleSupervisor, s.handleHVNetworkCreate))
 	mux.HandleFunc("DELETE /api/hv/networks/{id}", s.requireRole(model.RoleSupervisor, s.handleHVNetworkDelete))
 
@@ -809,6 +810,17 @@ func (in hvBoardInput) toModel(id, networkID int64) (model.HVSwitchboard, error)
 		return b, &db.UserError{Msg: "Fault rating must be between 0 and 1000 kA."}
 	}
 	return b, nil
+}
+
+// handleHVRefs names every way and incomer on the site, so a designation on
+// one drawing can point at the same designation on another.
+func (s *Server) handleHVRefs(w http.ResponseWriter, r *http.Request) {
+	list, err := s.Store.HVCrossRefs(ctx(r))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, list)
 }
 
 // handleHVBoardList names every switchboard on the site, whichever drawing it

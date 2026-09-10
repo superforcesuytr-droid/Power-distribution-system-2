@@ -823,16 +823,18 @@
   const isHead = d => !!d && (d.kind === 'switchgear' || d.kind === 'isolator');
 
   async function renderHV(networkId) {
-    const [net, boards, nets, sbs] = await Promise.all([
+    const [net, boards, nets, sbs, refs] = await Promise.all([
       api('GET', '/api/hv' + (networkId ? '?network=' + networkId : '')),
       api('GET', '/api/boards'),
       api('GET', '/api/hv/networks'),
       api('GET', '/api/hv/switchboards'),
+      api('GET', '/api/hv/refs'),
     ]);
     state.hv = net;
     state.hvBoards = boards;
     state.hvNets = nets;
     state.hvAllBoards = sbs;
+    state.hvRefs = refs;
     setActiveTab('hv');
     app.innerHTML = `
       <div class="page">
@@ -1384,10 +1386,11 @@
           out.push(`<rect class="hv-col-plate${canManage() ? ' hv-grab' : ''}"${fGrab} fill="${C.bus}" fill-opacity="0"
             x="${cx - FEEDER_W / 2 + 8}" y="${feederY - 30}" width="${FEEDER_W - 16}" height="${busY - feederY + 20}" rx="12"/>`);
           const gen = f.kind === 'generator';
-          out.push(`<g${canManage() ? ' class="hv-grab"' : ''}${fGrab}>
-            <title>${esc(f.name)}${f.side ? ' · backs the ' + (f.side === 'r' ? 'right' : 'left') + ' of the bar' : ''}${gen ? ' · generator' : ''}${canManage() ? ' - drag it anywhere along the busbar' : ''}</title>
+          const fRef = hvRefFor(f.name, 'way');
+          out.push(`<g${canManage() ? ' class="hv-grab"' : ''}${fGrab}${fRef ? ` data-action="hv-open-ref" data-id="${fRef.network_id}" data-ref="hv-${fRef.kind}-${fRef.id}"` : ''}>
+            <title>${esc(f.name)}${fRef ? ' · on ' + esc(fRef.network_name) + ' as a way - click to open it there' : ''}${f.side ? ' · backs the ' + (f.side === 'r' ? 'right' : 'left') + ' of the bar' : ''}${gen ? ' · generator' : ''}${canManage() ? ' - drag it anywhere along the busbar' : ''}</title>
             <rect x="${cx - FEEDER_W / 2 + 10}" y="${feederY - 26}" width="${FEEDER_W - 20}" height="${gen ? 56 : 46}" rx="9" fill="transparent"/>
-            <text x="${cx}" y="${gen ? feederY - 12 : feederY}" text-anchor="middle" font-size="19" font-weight="700" fill="${C.label}">${esc(f.name)}${f.side ? ` <tspan font-size="15" fill="${C.bus}">(${f.side.toUpperCase()})</tspan>` : ''}</text>
+            <text x="${cx}" y="${gen ? feederY - 12 : feederY}" text-anchor="middle" font-size="19" font-weight="700" fill="${hvRefFor(f.name, 'way') ? C.dest : C.label}">${esc(f.name)}${f.side ? ` <tspan font-size="15" fill="${C.bus}">(${f.side.toUpperCase()})</tspan>` : ''}</text>
             ${gen ? hvGenerator(cx, feederY + 12, C.line)
               : `<text x="${cx}" y="${feederY + 18}" text-anchor="middle" font-size="12" font-weight="600" fill="${C.muted}" letter-spacing=".8">${esc(f.voltage)}${f.source ? ' · ' + esc(f.source).toUpperCase() : ''}</text>`}
           </g>`);
@@ -1421,7 +1424,7 @@
             if (canEdit()) hvDrops.push({ x: cx - 46, y: fy - 34, w: 92, h: 30, feederId: f.id, afterId: dev.id });
           });
           out.push(fHandle);
-          out.push(`<g class="hv-col" data-col="feeder-${f.id}" data-home="${cx}">${out.splice(at).join('')}</g>`);
+          out.push(`<g class="hv-col" id="hv-feeder-${f.id}" data-col="feeder-${f.id}" data-home="${cx}">${out.splice(at).join('')}</g>`);
         });
         if (!nf) {
           out.push(`<text x="${sg.cx}" y="${swY}" text-anchor="middle" font-size="12" fill="${C.muted}">No incoming feeder on this section</text>`);
@@ -1470,12 +1473,12 @@
           }
 
           if (headIsSwitch) {
-            out.push(hvDevice(wx, wayTapY, head));
+            out.push(hvDevice(wx, wayTapY, head, '', hvRefFor(head.name || way.name, 'feeder')));
           } else {
             // A low-tension board's way carries nothing at the bar: it simply
             // leaves it, and only its designation is written up the side.
             if (net.tier !== 'lt') out.push(hvBreaker(wx, wayTapY, C.line));
-            out.push(hvTag(wx - TAG_X, wayTapY + 26, way.name, C.label, 12));
+            out.push(hvRefTag(wx - TAG_X, wayTapY + 26, way.name, 12, hvRefFor(way.name, 'feeder')));
           }
 
           const headId = headIsSwitch ? head.id : 0;
@@ -1497,7 +1500,7 @@
           } else if (feedsDown) {
             // It lands on the switchboard below rather than in a box, the way
             // a drawing simply runs the line onto the next bus.
-            out.push(`<g class="hv-node" id="hv-way-${way.id}" data-action="hv-edit-way" data-id="${way.id}"${wGrab}>
+            out.push(`<g class="hv-node" data-action="hv-edit-way" data-id="${way.id}"${wGrab}>
               <title>${esc(way.name)} feeds ${esc(down.board.name)}${canEdit() ? ' - click to change where it lands' : ''}</title>
               <rect x="${wx - 22}" y="${foot - 30}" width="44" height="52" fill="transparent"/>
               <circle cx="${wx}" cy="${foot}" r="6" fill="${C.bus}"/>
@@ -1518,7 +1521,7 @@
               : (way.dest_board_id ? `data-action="hv-open-dest" data-id="${way.dest_board_id}"`
                 : (canEdit() ? `data-action="hv-edit-way" data-id="${way.id}"` : ''));
             const names = box.members.map(m => m.way.name).join(', ');
-            out.push(`<g class="${destAct ? 'hv-node ' : ''}${linked ? 'hv-linked' : ''}" id="hv-way-${way.id}" ${destAct}${wGrab}>
+            out.push(`<g class="${destAct ? 'hv-node ' : ''}${linked ? 'hv-linked' : ''}" ${destAct}${wGrab}>
               <title>${esc(label)}${shared ? ' · fed by ' + esc(names) : (way.dest_detail ? ' · ' + esc(way.dest_detail) : '')}${across ? ' on ' + esc(way.dest_network_name) + ' - click to open that drawing' : (linked ? ' - click to open this board' : (destAct ? ' - click to set where this way feeds' : ''))}</title>
               <rect x="${box.cx - box.w / 2}" y="${destY}" width="${box.w}" height="${DEST_H}" rx="9"
                     fill="${linked ? '#f2fbf6' : '#f8fafc'}" stroke="${dcol}" stroke-width="2.5"/>
@@ -1533,7 +1536,7 @@
               <g transform="translate(${wx + WAY_W / 2 - 29} ${ey + 3})" fill="none" stroke="${C.line}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${SLD_ICONS.edit}</g></g>`);
           }
           out.push(wHandle);
-          out.push(`<g class="hv-col" data-col="way-${way.id}" data-home="${wx}">${out.splice(at).join('')}</g>`);
+          out.push(`<g class="hv-col" id="hv-way-${way.id}" data-col="way-${way.id}" data-home="${wx}">${out.splice(at).join('')}</g>`);
         });
       });
 
@@ -1589,7 +1592,17 @@
         font-size="${size || 12}" font-weight="700" fill="${col}" letter-spacing=".5">${esc(text)}</text>`;
     }
 
-    function hvDevice(cx, cy, d, alt) {
+    // The same designation drawn as a link, when another drawing carries it.
+    function hvRefTag(x, y, text, size, ref) {
+      if (!ref) return hvTag(x, y, text, C.label, size);
+      return `<g class="hv-node hv-ref" data-action="hv-open-ref" data-id="${ref.network_id}" data-ref="hv-${ref.kind}-${ref.id}">
+        <title>${esc(text)} is on ${esc(ref.network_name)}${ref.board_name ? ', at ' + esc(ref.board_name) : ''} - click to open it there</title>
+        <rect x="${x - (size || 12) - 4}" y="${y - 96}" width="${(size || 12) + 12}" height="100" fill="transparent"/>
+        ${hvTag(x, y, text, C.dest, size)}
+      </g>`;
+    }
+
+    function hvDevice(cx, cy, d, alt, ref) {
       const g = [];
       const kind = d.kind;
       const col = kind === 'transformer' ? C.tx : (['rccb', 'elr', 'elcb'].includes(kind) ? C.prot : C.line);
@@ -1625,7 +1638,7 @@
           <text x="${cx}" y="${cy + 5}" text-anchor="middle" font-size="12" font-weight="700" fill="${col}">${esc(label)}</text>`);
       }
       const tag = d.name || alt || '';
-      if (tag && kind !== 'chiller') g.push(hvTag(cx - TAG_X, cy + 22, tag, C.label, 11));
+      if (tag && kind !== 'chiller') g.push(hvRefTag(cx - TAG_X, cy + 22, tag, 11, ref));
       const title = `${label}${tag ? ' ' + tag : ''}${d.notes ? ' · ' + d.notes : ''}`;
       let inner = `<g class="${canEdit() ? 'hv-node' : ''}" ${canEdit() ? `data-action="hv-edit-device" data-id="${d.id}"` : ''}>
         <title>${esc(title)}${canEdit() ? ' - click to change or remove' : ''}</title>
@@ -2160,6 +2173,17 @@
       });
   }
 
+  // The same designation on another drawing: a circuit is a way where it
+  // leaves one board and an incomer where it lands on the next, so one can be
+  // followed to the other.
+  function hvRefFor(name, kind) {
+    const key = (name || '').trim().toUpperCase();
+    if (!key) return null;
+    const here = (state.hv || {}).id;
+    return (state.hvRefs || []).find(r =>
+      r.kind === kind && r.network_id !== here && (r.name || '').trim().toUpperCase() === key) || null;
+  }
+
   const hvBoards = () => (state.hv && state.hv.switchboards) || [];
   const hvSections = () => hvBoards().flatMap(b => b.sections);
   const hvFeeders = () => hvSections().flatMap(sec => sec.feeders);
@@ -2410,6 +2434,8 @@
       case 'hv-open-dest': navigate(boardHash('dashboard', id)); break;
       // Across to another drawing, landing on the switchboard the way feeds.
       case 'hv-open-drawing': navigate('#/hv/' + id + (el.dataset.board ? '?focus=hv-board-' + el.dataset.board : '')); break;
+      // The same designation on another drawing.
+      case 'hv-open-ref': navigate('#/hv/' + id + '?focus=' + el.dataset.ref); break;
       case 'refresh': render(); break;
     }
   });
