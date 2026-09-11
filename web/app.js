@@ -1246,10 +1246,12 @@
     // Which boards are joined by a tap, so they can be drawn beside one another
     // - that run goes across the sheet, not down it.
     const tapPairs = [];
+    const tappedBy = {};
     let tapCount = 0;
     (net.switchboards || []).forEach(b => b.sections.forEach(sec => sec.feeders.forEach(f => {
       const src = sourceOf(f);
       if (!src) return;
+      tappedBy[src.id] = f;
       tapCount++;
       const from = boardOfSection[src.section_id];
       if (from && from !== b.id) tapPairs.push([b.id, from]);
@@ -1340,7 +1342,9 @@
     });
     boards.forEach(g => g.board.sections.forEach(sec => sec.ways.forEach(w => {
       const down = w.dest_switchboard_id ? boardAt[w.dest_switchboard_id] : null;
-      if (!down || down.i <= g.i) return;
+      // A way an incomer taps does not run down the sheet to that board, it
+      // runs across to that incomer, so the two boards stand side by side.
+      if (!down || down.i <= g.i || tappedBy[w.id]) return;
       const a = stackOf.get(g.board.id), b = stackOf.get(down.board.id);
       if (!a || !b || a === b) return;
       b.members.forEach(m => stackOf.set(m.board.id, a));
@@ -1584,15 +1588,10 @@
     }));
 
     const out = [];
-    // Which way each incomer on this drawing taps, and where every way ended
-    // up, so the two can be joined once both have been drawn.
-    const tappedBy = {};
+    // Where every way ended up, so an incomer tapping one can be joined to it
+    // once both have been drawn.
     const planIndex = {};
     const underDrawn = [];
-    (net.switchboards || []).forEach(b => b.sections.forEach(sec => sec.feeders.forEach(f => {
-      const src = sourceOf(f);
-      if (src) tappedBy[src.id] = f;
-    })));
 
     boards.forEach(g => {
       const board = g.board;
@@ -1611,7 +1610,10 @@
       const allPlans = [];
       g.secs.forEach(sg => sg.sec.ways.forEach((way, i) => {
         const down = way.dest_switchboard_id ? boardAt[way.dest_switchboard_id] : null;
-        const feedsDown = !!(down && down.i > g.i);
+        // An incomer tapping this way is where it lands, and it says exactly
+        // which way in on the board it lands at - so it wins over the plain
+        // drop onto that board's bus, and naming both draws it once.
+        const feedsDown = !!(down && down.i > g.i) && !tappedBy[way.id];
         const across = !down && !!way.dest_switchboard_id && !!way.dest_network_id;
         const head = way.devices[0];
         const headIsSwitch = isHead(head);
