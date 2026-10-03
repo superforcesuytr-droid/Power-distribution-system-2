@@ -11,6 +11,10 @@ import (
 	"github.com/superforcesuytr-droid/power-distribution-system/internal/model"
 )
 
+// tierOrder sorts drawings the way supply flows: high tension, then low
+// tension, then anything not marked as either, each in the order added.
+const tierOrder = `CASE tier WHEN 'ht' THEN 0 WHEN 'lt' THEN 1 ELSE 2 END, position, id`
+
 // HVNetworks lists the drawings, high tension first, without loading what is
 // on any of them. It is what the picker above the diagram is built from.
 func (s *Store) HVNetworks(ctx context.Context) ([]model.HVNetwork, error) {
@@ -19,7 +23,7 @@ func (s *Store) HVNetworks(ctx context.Context) ([]model.HVNetwork, error) {
 		return nil, err
 	}
 	rows, err := pool.Query(ctx, `SELECT id, name, voltage, tier, position
-		FROM hv_networks ORDER BY position, id`)
+		FROM hv_networks ORDER BY `+tierOrder)
 	if err != nil {
 		return nil, err
 	}
@@ -45,7 +49,7 @@ func (s *Store) HVSwitchboardList(ctx context.Context) ([]model.HVSwitchboard, e
 	rows, err := pool.Query(ctx, `SELECT b.id, b.network_id, b.name, b.voltage, b.position,
 		n.name, n.tier, n.position
 		FROM hv_switchboards b JOIN hv_networks n ON n.id = b.network_id
-		ORDER BY n.position, n.id, b.position, b.id`)
+		ORDER BY CASE n.tier WHEN 'ht' THEN 0 WHEN 'lt' THEN 1 ELSE 2 END, n.position, n.id, b.position, b.id`)
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +175,7 @@ func (s *Store) HVNetwork(ctx context.Context, id int64) (*model.HVNetwork, erro
 	}
 	var n model.HVNetwork
 	err = pool.QueryRow(ctx, `SELECT id, name, voltage, tier, position FROM hv_networks
-		WHERE $1 = 0 OR id = $1 ORDER BY position, id LIMIT 1`, id).
+		WHERE $1 = 0 OR id = $1 ORDER BY `+tierOrder+` LIMIT 1`, id).
 		Scan(&n.ID, &n.Name, &n.Voltage, &n.Tier, &n.Position)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
