@@ -519,7 +519,7 @@
   // Both diagrams are one SVG with a viewBox, so scaling is a matter of the
   // width it is rendered at; the canvas around it scrolls. That keeps text
   // crisp at any zoom, which a bitmap scale would not.
-  const ZOOM_MIN = 0.25, ZOOM_MAX = 3, ZOOM_FIT_MAX = 1.6, CANVAS_MIN_H = 360;
+  const ZOOM_MIN = 0.1, ZOOM_MAX = 3, ZOOM_FIT_MAX = 1.6, CANVAS_MIN_H = 360;
 
   function zoomBar() {
     return `<div class="zoom-bar">
@@ -2055,6 +2055,21 @@
           <text x="${mid}" y="${busY + 34}" text-anchor="middle" font-size="10" letter-spacing="1" fill="${c.closed ? C.prot : C.muted}">${c.closed ? 'CLOSED · TIED' : 'OPEN'}</text>
         </g>`);
       });
+      // Two lengths of bar side by side with no coupler between them are one
+      // bus running straight through - an extension panel bolted on to the end
+      // of a board - so the bar is drawn on across the gap rather than left
+      // open as though the two were not connected.
+      const tied = new Set();
+      (board.couplers || []).forEach(c => {
+        tied.add(c.left_section_id + ':' + c.right_section_id);
+        tied.add(c.right_section_id + ':' + c.left_section_id);
+      });
+      for (let i = 1; i < g.secs.length; i++) {
+        const a = g.secs[i - 1], z = g.secs[i];
+        if (tied.has(a.sec.id + ':' + z.sec.id)) continue;
+        out.push(`<line x1="${a.busR}" y1="${busY}" x2="${z.busL}" y2="${busY}"
+          stroke="${C.bus}" stroke-width="6" stroke-linecap="round"/>`);
+      }
       grips.forEach(gr => out.push(gr));
     });
 

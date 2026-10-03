@@ -281,7 +281,7 @@
       "sections": [
         {
           "name": "Section A",
-          "width": 2254,
+          "width": 2952,
           "feeders": [
             {
               "name": "GEN A",
@@ -457,6 +457,52 @@
               ]
             }
           ]
+        },
+        {
+          "name": "6.6KV - EXT",
+          "feeders": [
+            {
+              "name": "22SGA05",
+              "voltage": "6.6kV",
+              "source": "From 22KV EXT LHS",
+              "devices": [
+                {
+                  "kind": "transformer",
+                  "name": "TX03",
+                  "ratio": "22kV / 6.6kV"
+                }
+              ]
+            }
+          ],
+          "ways": [
+            {
+              "name": "CH#9",
+              "head": "isolator",
+              "head_name": "",
+              "devices": [
+                {
+                  "kind": "chiller",
+                  "name": "CH#9"
+                }
+              ]
+            },
+            {
+              "name": "CH#10",
+              "head": "isolator",
+              "head_name": "",
+              "devices": [
+                {
+                  "kind": "chiller",
+                  "name": "CH#10"
+                }
+              ]
+            },
+            {
+              "name": "SPARE",
+              "head": "isolator",
+              "dest_label": "Spare"
+            }
+          ]
         }
       ],
       "couplers": [
@@ -508,14 +554,8 @@
             {
               "name": "22SGA05",
               "head": "switchgear",
-              "feeds": "6.6KV - EXT Switchboard",
-              "devices": [
-                {
-                  "kind": "transformer",
-                  "name": "TX03",
-                  "ratio": "22kV / 6.6kV"
-                }
-              ]
+              "dest_label": "6.6KV EXT",
+              "dest_detail": "TX03"
             },
             {
               "name": "22SGA04",
@@ -581,48 +621,6 @@
             {
               "name": "22SGB06",
               "head": "switchgear",
-              "dest_label": "Spare"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "6.6KV - EXT Switchboard",
-      "voltage": "6.6kV",
-      "phases": "3p",
-      "frequency": "50Hz",
-      "current_a": 1250,
-      "fault_ka": 25,
-      "sections": [
-        {
-          "name": "Section A",
-          "ways": [
-            {
-              "name": "CH#9",
-              "head": "isolator",
-              "head_name": "",
-              "devices": [
-                {
-                  "kind": "chiller",
-                  "name": "CH#9"
-                }
-              ]
-            },
-            {
-              "name": "CH#10",
-              "head": "isolator",
-              "head_name": "",
-              "devices": [
-                {
-                  "kind": "chiller",
-                  "name": "CH#10"
-                }
-              ]
-            },
-            {
-              "name": "SPARE",
-              "head": "isolator",
               "dest_label": "Spare"
             }
           ]
