@@ -1243,18 +1243,39 @@
       sec.ways.forEach(w => { wayAt[w.id] = w; });
     }));
     const sourceOf = f => (f.source_way_id && wayAt[f.source_way_id]) || null;
+    // Two ways run into one box only when they feed one thing: the same
+    // destination through the same transformer, as an MCC fed from both ends
+    // of a board is. Two transformers at one building - PE 8 by TX33 and PE 8
+    // by TX34 - are two supplies and two boxes, and a spare is never anyone
+    // else's spare.
+    const destKey = w => {
+      const detail = (w.dest_detail || '').trim().toUpperCase();
+      const with_ = k => k + (detail ? '|' + detail : '');
+      if (w.dest_switchboard_id) return with_('sb:' + w.dest_switchboard_id);
+      if (w.dest_board_id) return with_('bd:' + w.dest_board_id);
+      const label = (w.dest_label || '').trim().toUpperCase();
+      if (!label || label === 'SPARE') return '';
+      return with_('la:' + label);
+    };
     // Which boards are joined by a tap, so they can be drawn beside one another
     // - that run goes across the sheet, not down it.
     const tapPairs = [];
     const tappedBy = {};
     let tapCount = 0;
+    // How far along its board each way stands, so a board tapping one can be
+    // set out on that side of it.
+    const alongBoard = {};
+    (net.switchboards || []).forEach(b => {
+      const ways = b.sections.flatMap(sec => sec.ways);
+      ways.forEach((w, i) => { alongBoard[w.id] = (i + 0.5) / ways.length; });
+    });
     (net.switchboards || []).forEach(b => b.sections.forEach(sec => sec.feeders.forEach(f => {
       const src = sourceOf(f);
       if (!src) return;
       tappedBy[src.id] = f;
       tapCount++;
       const from = boardOfSection[src.section_id];
-      if (from && from !== b.id) tapPairs.push([b.id, from]);
+      if (from && from !== b.id) tapPairs.push([b.id, from, alongBoard[src.id]]);
     })));
     const planSection = sec => {
       const sided = sec.feeders.some(f => f.side) || sec.ways.some(w => w.side);
@@ -1294,9 +1315,7 @@
       // supplies on different lengths of its bar.
       const seen = {};
       board.sections.forEach(sec => sec.ways.forEach(w => {
-        const k = w.dest_switchboard_id ? 'sb:' + w.dest_switchboard_id
-          : (w.dest_board_id ? 'bd:' + w.dest_board_id
-            : ((w.dest_label || '').trim().toUpperCase() ? 'la:' + (w.dest_label || '').trim().toUpperCase() : ''));
+        const k = destKey(w);
         if (k) seen[k] = (seen[k] || 0) + 1;
       }));
       // Room above the boxes for the runs into them: one line per way sharing a
@@ -1374,6 +1393,22 @@
       b.stacks = [];
     });
     clusters = clusters.filter(c => c.stacks.length);
+    // Within a block, a board tapping another stands on the side of it its way
+    // is on, so the run between them is a short one: a panel tapping a way at
+    // the left-hand end of a board stands to its left, one at the right-hand
+    // end to its right.
+    clusters.forEach(c => {
+      if (c.stacks.length < 2) return;
+      const stackWith = id => c.stacks.find(st => st.members.some(g => g.board.id === id));
+      const side = new Map();
+      tapPairs.forEach(([tapper, source, along]) => {
+        const t = stackWith(tapper), s = stackWith(source);
+        if (!t || !s || t === s || side.has(t)) return;
+        side.set(t, along < 0.5 ? -1 : 1);
+      });
+      c.stacks = c.stacks.filter(st => side.get(st) === -1)
+        .concat(c.stacks.filter(st => !side.has(st)), c.stacks.filter(st => side.get(st) === 1));
+    });
     clusters.forEach(c => {
       c.width = c.stacks.reduce((t, st) => t + st.width, 0) + (c.stacks.length - 1) * STACK_GAP;
       c.height = c.stacks.reduce((m, st) => Math.max(m, st.height), 0);
@@ -1564,10 +1599,17 @@
       if (!best) return;
       best.busL = Math.min(best.busL, x - 14);
       best.busR = Math.max(best.busR, x + 14);
+      // A way landing here is this section's supply as much as an incomer is.
+      (best.landings = best.landings || []).push(x);
     })));
     // A board's caption sits at the left-hand end of the bus it names, which
-    // may reach further left than the columns once a way has landed on it.
-    boards.forEach(g => { g.busL = g.secs.reduce((m, sg) => Math.min(m, sg.busL), g.left); });
+    // may reach further left than the columns once a way has landed on it -
+    // but clear of that way, rather than written through the line coming down.
+    boards.forEach(g => {
+      g.busL = g.secs.reduce((m, sg) => Math.min(m, sg.busL), g.left);
+      const landed = g.secs.flatMap(sg => sg.landings || []).filter(x => x < g.busL + 40);
+      g.captionX = landed.length ? Math.max(...landed) + 12 : g.busL;
+    });
 
     // Where a whole column may be dropped when one is dragged along a bar: one
     // run per kind, and per side where a bar is fed from both ends. Every run
@@ -1633,9 +1675,6 @@
         allPlans.push(pl);
       }));
       // Two ways that name the same destination land in the same box.
-      const destKey = w => (w.dest_switchboard_id ? 'sb:' + w.dest_switchboard_id
-        : (w.dest_board_id ? 'bd:' + w.dest_board_id
-          : ((w.dest_label || '').trim().toUpperCase() ? 'la:' + (w.dest_label || '').trim().toUpperCase() : '')));
       const boxes = [];
       const boxByKey = {};
       allPlans.forEach(pl => {
@@ -1736,9 +1775,9 @@
       // the bar cannot take the pointer from the board's own name.
       grips.push(`<g id="hv-board-${board.id}" class="${canManage() ? 'hv-node' : ''}" ${canManage() ? `data-action="hv-edit-board" data-id="${board.id}"` : ''}>
         <title>${esc(board.name)}${rating ? ' · ' + esc(rating) : ''}${canManage() ? ' - click to change its rating' : ''}</title>
-        <rect x="${g.busL}" y="${busY - 62}" width="300" height="40" fill="transparent"/>
-        <text x="${g.busL + 2}" y="${busY - 44}" font-size="15" font-weight="700" fill="${C.bus}">${esc(board.name)}</text>
-        <text x="${g.busL + 2}" y="${busY - 29}" font-size="11" font-weight="600" fill="${C.muted}" letter-spacing=".4">${esc(rating || (canManage() ? 'Set the rating' : ''))}</text>
+        <rect x="${g.captionX}" y="${busY - 62}" width="300" height="40" fill="transparent"/>
+        <text x="${g.captionX + 2}" y="${busY - 44}" font-size="15" font-weight="700" fill="${C.bus}">${esc(board.name)}</text>
+        <text x="${g.captionX + 2}" y="${busY - 29}" font-size="11" font-weight="600" fill="${C.muted}" letter-spacing=".4">${esc(rating || (canManage() ? 'Set the rating' : ''))}</text>
       </g>`);
 
       g.secs.forEach(sg => {
@@ -1818,7 +1857,7 @@
           out.push(fHandle);
           out.push(`<g class="hv-col" id="hv-feeder-${f.id}" data-col="feeder-${f.id}" data-home="${cx}">${out.splice(at).join('')}</g>`);
         });
-        if (!nf && !sg.under.length) {
+        if (!nf && !sg.under.length && !(sg.landings || []).length) {
           out.push(`<text x="${sg.cx}" y="${swY}" text-anchor="middle" font-size="12" fill="${C.muted}">No incoming feeder on this section</text>`);
         }
 
@@ -2667,15 +2706,35 @@
   }
 
   // ---- drawings
-  function hvNetworkForm(net) {
+  async function hvNetworkForm(net) {
     const isEdit = !!(net && net.id);
-    formModal(isEdit ? 'Rename ' + net.name : 'Add a drawing', `
-      ${field('Title', 'name', isEdit ? net.name : '', { required: true, full: true, placeholder: 'e.g. SSMC Low Tension Distribution' })}
+    // A new drawing can start empty or from one of the ready-made layouts the
+    // app carries, which puts a whole site's switchboards down at once.
+    let templates = [];
+    if (!isEdit) {
+      try { templates = await api('GET', '/api/hv/templates'); } catch (_) { templates = []; }
+    }
+    const tplSummary = t => {
+      const c = t.counts || {};
+      return `${plural(c.switchboards || 0, 'switchboard')}, ${plural(c.feeders || 0, 'incomer')}, ${plural(c.ways || 0, 'way')}`;
+    };
+    const form = formModal(isEdit ? 'Rename ' + net.name : 'Add a drawing', `
+      ${isEdit || !templates.length ? '' : field('Start from', 'template', '', { type: 'select', full: true,
+        options: [{ value: '', label: 'An empty drawing' }].concat(templates.map(t => ({ value: t.key, label: t.name + ' - ' + tplSummary(t) }))),
+        hint: 'A ready-made layout is put down as a new drawing of its own; nothing already here is changed.' })}
+      ${field('Title', 'name', isEdit ? net.name : '', { required: !isEdit ? false : true, full: true, placeholder: 'e.g. SSMC Low Tension Distribution' })}
       ${field('Tension', 'tier', isEdit ? (net.tier || 'lt') : 'lt', { type: 'select', required: true,
         options: [{ value: 'ht', label: 'High tension' }, { value: 'lt', label: 'Low tension' }] })}
       ${field('Voltage', 'voltage', isEdit ? net.voltage : '400V', { placeholder: '400V' })}
-      <p class="field full hint" style="margin:0">A drawing of its own, with its own switchboards. A way on another drawing can land on a switchboard here, and its destination box will link across.</p>`,
+      <p class="field full hint" style="margin:0" data-tpl-note>A drawing of its own, with its own switchboards. A way on another drawing can land on a switchboard here, and its destination box will link across.</p>`,
       async d => {
+        if (!isEdit && d.template) {
+          const r = await api('POST', '/api/hv/templates/' + encodeURIComponent(d.template), { name: d.name || '' });
+          navigate('#/hv/' + r.id);
+          toast('Drawing laid out');
+          return;
+        }
+        if (!(d.name || '').trim()) throw new Error('Give the drawing a title.');
         const body = { name: d.name, voltage: d.voltage, tier: d.tier };
         if (isEdit) { await api('PUT', '/api/hv?network=' + net.id, body); await afterChange('Drawing renamed'); }
         else {
@@ -2686,18 +2745,54 @@
       },
       isEdit && canManage() && (state.hvNets || []).length > 1
         ? { wide: true, deleteLabel: 'Delete drawing', onDelete: () => hvDeleteNetwork(net) } : { wide: true });
+    // Choosing a layout fills in what it is, and the title becomes optional.
+    const pick = form && $('[name=template]', form);
+    if (pick) {
+      const note = $('[data-tpl-note]', form);
+      const plain = note ? note.textContent : '';
+      pick.addEventListener('change', () => {
+        const t = templates.find(x => x.key === pick.value);
+        const title = $('[name=name]', form);
+        if (title) title.placeholder = t ? t.name : 'e.g. SSMC Low Tension Distribution';
+        ['tier', 'voltage'].forEach(n => { const el = $('[name=' + n + ']', form); if (el) el.closest('.field').hidden = !!t; });
+        if (note) note.textContent = t ? t.description : plain;
+      });
+    }
   }
   function hvDeleteNetwork(net) {
-    if ((net.board_count || (net.switchboards || []).length) > 0) {
-      toast('Delete the switchboards on ' + net.name + ' first.', 'error');
+    const boards = net.board_count || (net.switchboards || []).length;
+    if (!boards) {
+      confirmModal('Delete drawing', `Delete <b>${esc(net.name)}</b>?`,
+        async () => {
+          await api('DELETE', '/api/hv/networks/' + net.id);
+          navigate('#/hv');
+          toast('Drawing deleted');
+        });
       return;
     }
-    confirmModal('Delete drawing', `Delete <b>${esc(net.name)}</b>?`,
-      async () => {
-        await api('DELETE', '/api/hv/networks/' + net.id);
+    // A drawing with switchboards on it goes only once its name has been typed
+    // back, since everything on it goes too and none of it comes back.
+    const modal = openModal('Delete drawing and everything on it', `
+      <p style="margin:0 0 10px">This deletes <b>${esc(net.name)}</b> and the <b>${plural(boards, 'switchboard')}</b> on it, with every bus section, coupler, incomer, way and device. It cannot be undone.</p>
+      <div class="field full"><label for="del_net_name">Type the drawing's title to confirm</label>
+        <input id="del_net_name" autocomplete="off" placeholder="${esc(net.name)}"></div>
+      <div class="form-error" id="form-error"></div>
+      <div class="form-actions">
+        <button type="button" class="btn" data-close>Cancel</button>
+        <button type="button" class="btn btn-danger" data-act="confirm" disabled>Delete it all</button>
+      </div>`);
+    const input = $('#del_net_name', modal), go = $('[data-act=confirm]', modal);
+    input.addEventListener('input', () => { go.disabled = input.value.trim() !== net.name.trim(); });
+    go.addEventListener('click', async () => {
+      go.disabled = true;
+      try {
+        await api('DELETE', '/api/hv/networks/' + net.id + '?everything=yes');
+        closeModal();
         navigate('#/hv');
         toast('Drawing deleted');
-      });
+      } catch (e) { $('#form-error', modal).textContent = e.message; go.disabled = false; }
+    });
+    input.focus();
   }
 
   // The same designation on another drawing: a circuit is a way where it

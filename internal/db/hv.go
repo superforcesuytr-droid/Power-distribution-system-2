@@ -463,9 +463,10 @@ func (s *Store) CreateHVNetwork(ctx context.Context, role string, n model.HVNetw
 	return id, err
 }
 
-// DeleteHVNetwork removes a drawing, which is refused while anything is still
-// drawn on it so a whole site cannot go in one click.
-func (s *Store) DeleteHVNetwork(ctx context.Context, role string, id int64) error {
+// DeleteHVNetwork removes a drawing. Unless everything is asked for, it is
+// refused while anything is still drawn on it, so a whole site cannot go in
+// one click; asked for, the switchboards and all on them go with it.
+func (s *Store) DeleteHVNetwork(ctx context.Context, role string, id int64, everything bool) error {
 	return s.withTx(ctx, func(tx pgx.Tx) error {
 		var name string
 		var boards, left int
@@ -481,13 +482,17 @@ func (s *Store) DeleteHVNetwork(ctx context.Context, role string, id int64) erro
 		if left < 2 {
 			return &UserError{"This is the only drawing there is."}
 		}
-		if boards > 0 {
+		if boards > 0 && !everything {
 			return &UserError{"Delete the switchboards on " + name + " first, so nothing is thrown away by mistake."}
 		}
 		if _, err := tx.Exec(ctx, `DELETE FROM hv_networks WHERE id = $1`, id); err != nil {
 			return err
 		}
-		return s.audit(ctx, tx, role, "delete", "hv_network", id, "Deleted the drawing "+name)
+		what := "Deleted the drawing " + name
+		if boards > 0 {
+			what += fmt.Sprintf(" and the %d switchboards on it", boards)
+		}
+		return s.audit(ctx, tx, role, "delete", "hv_network", id, what)
 	})
 }
 

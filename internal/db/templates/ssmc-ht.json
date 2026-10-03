@@ -1,0 +1,633 @@
+{
+  "key": "ssmc-ht",
+  "name": "SSMC Electrical Distribution Overview",
+  "description": "The 22kV switchboard with its F1-F4 incomers, the 22kV EXT LHS and RHS extension panels, the 6.6kV switchboard with its four generators and chillers, and the 6.6kV EXT panel - as on the SSMC distribution overview drawing.",
+  "tier": "ht",
+  "voltage": "22kV",
+  "boards": [
+    {
+      "name": "22KV Switchboard",
+      "voltage": "22kV",
+      "phases": "3p",
+      "frequency": "50Hz",
+      "current_a": 1250,
+      "fault_ka": 25,
+      "sections": [
+        {
+          "name": "Section A",
+          "feeders": [
+            {
+              "name": "F1",
+              "switchgear": "22SGI1",
+              "voltage": "22kV",
+              "source": "Incoming supply 1",
+              "offset_x": 0.75127
+            },
+            {
+              "name": "F2",
+              "switchgear": "22SGI2",
+              "voltage": "22kV",
+              "source": "Incoming supply 2",
+              "offset_x": 0.8769
+            }
+          ],
+          "ways": [
+            {
+              "name": "22SG35",
+              "head": "switchgear"
+            },
+            {
+              "name": "22SG33",
+              "head": "switchgear",
+              "dest_label": "PE 8",
+              "dest_detail": "TX33"
+            },
+            {
+              "name": "22SG31",
+              "head": "switchgear",
+              "dest_label": "PE 7",
+              "dest_detail": "TX31"
+            },
+            {
+              "name": "22SGGAS1",
+              "head": "switchgear",
+              "dest_label": "Spare"
+            },
+            {
+              "name": "22SG27",
+              "head": "switchgear",
+              "dest_label": "PE 6",
+              "dest_detail": "TX27"
+            },
+            {
+              "name": "22SG25",
+              "head": "switchgear",
+              "dest_label": "PE 5",
+              "dest_detail": "TX25"
+            },
+            {
+              "name": "22SG23",
+              "head": "switchgear",
+              "dest_label": "PE 4",
+              "dest_detail": "TX23"
+            },
+            {
+              "name": "22SG21",
+              "head": "switchgear",
+              "dest_label": "PE 3",
+              "dest_detail": "TX21"
+            },
+            {
+              "name": "22SG19",
+              "head": "switchgear",
+              "dest_label": "PE 2",
+              "dest_detail": "TX19"
+            },
+            {
+              "name": "22SG17",
+              "head": "switchgear",
+              "dest_label": "PE 1",
+              "dest_detail": "TX17"
+            },
+            {
+              "name": "22SG15",
+              "head": "switchgear",
+              "dest_label": "EQ 1",
+              "dest_detail": "TX15"
+            },
+            {
+              "name": "22SG13",
+              "head": "switchgear",
+              "dest_label": "FAC 5",
+              "dest_detail": "TX13"
+            },
+            {
+              "name": "22SG11",
+              "head": "switchgear",
+              "dest_label": "FAC 4",
+              "dest_detail": "TX11"
+            },
+            {
+              "name": "22SG09",
+              "head": "switchgear",
+              "dest_label": "FAC 3",
+              "dest_detail": "TX09"
+            },
+            {
+              "name": "22SG05",
+              "head": "switchgear",
+              "dest_label": "FAC 1",
+              "dest_detail": "TX05"
+            },
+            {
+              "name": "22SG01",
+              "head": "switchgear",
+              "feeds": "6.6KV Switchboard",
+              "devices": [
+                {
+                  "kind": "transformer",
+                  "name": "TX01",
+                  "ratio": "22kV / 6.6kV"
+                },
+                {
+                  "kind": "switchgear",
+                  "name": "6.6SGI1"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Section B",
+          "feeders": [
+            {
+              "name": "F3",
+              "switchgear": "22SGI3",
+              "voltage": "22kV",
+              "source": "Incoming supply 3",
+              "offset_x": 0.06028
+            },
+            {
+              "name": "F4",
+              "switchgear": "22SGI4",
+              "voltage": "22kV",
+              "source": "Incoming supply 4",
+              "offset_x": 0.24873
+            }
+          ],
+          "ways": [
+            {
+              "name": "22SG02",
+              "head": "switchgear",
+              "feeds": "6.6KV Switchboard",
+              "devices": [
+                {
+                  "kind": "transformer",
+                  "name": "TX02",
+                  "ratio": "22kV / 6.6kV"
+                },
+                {
+                  "kind": "switchgear",
+                  "name": "6.6SGI2"
+                }
+              ]
+            },
+            {
+              "name": "22SG06",
+              "head": "switchgear",
+              "dest_label": "FAC 1",
+              "dest_detail": "TX06"
+            },
+            {
+              "name": "22SG10",
+              "head": "switchgear",
+              "dest_label": "FAC 3",
+              "dest_detail": "TX10"
+            },
+            {
+              "name": "22SG12",
+              "head": "switchgear",
+              "dest_label": "FAC 4",
+              "dest_detail": "TX12"
+            },
+            {
+              "name": "22SG14",
+              "head": "switchgear",
+              "dest_label": "FAC 5",
+              "dest_detail": "TX14"
+            },
+            {
+              "name": "22SG16",
+              "head": "switchgear",
+              "dest_label": "EQ 1",
+              "dest_detail": "TX16"
+            },
+            {
+              "name": "22SG18",
+              "head": "switchgear",
+              "dest_label": "PE 1",
+              "dest_detail": "TX18"
+            },
+            {
+              "name": "22SG20",
+              "head": "switchgear",
+              "dest_label": "PE 2",
+              "dest_detail": "TX20"
+            },
+            {
+              "name": "22SG22",
+              "head": "switchgear",
+              "dest_label": "PE 3",
+              "dest_detail": "TX22"
+            },
+            {
+              "name": "22SG24",
+              "head": "switchgear",
+              "dest_label": "PE 4",
+              "dest_detail": "TX24"
+            },
+            {
+              "name": "22SG26",
+              "head": "switchgear",
+              "dest_label": "PE 5",
+              "dest_detail": "TX26"
+            },
+            {
+              "name": "22SG28",
+              "head": "switchgear",
+              "dest_label": "PE 6",
+              "dest_detail": "TX28"
+            },
+            {
+              "name": "22SGGAS2",
+              "head": "switchgear",
+              "dest_label": "Spare"
+            },
+            {
+              "name": "22SG32",
+              "head": "switchgear",
+              "dest_label": "PE 7",
+              "dest_detail": "TX32"
+            },
+            {
+              "name": "22SG34",
+              "head": "switchgear",
+              "dest_label": "PE 8",
+              "dest_detail": "TX34"
+            },
+            {
+              "name": "22SG36",
+              "head": "switchgear"
+            }
+          ]
+        }
+      ],
+      "couplers": [
+        {
+          "name": "22SGBS",
+          "left": "Section A",
+          "right": "Section B",
+          "closed": false
+        }
+      ]
+    },
+    {
+      "name": "6.6KV Switchboard",
+      "voltage": "6.6kV",
+      "phases": "3p",
+      "frequency": "50Hz",
+      "current_a": 1250,
+      "fault_ka": 25,
+      "sections": [
+        {
+          "name": "Section A",
+          "width": 2254,
+          "feeders": [
+            {
+              "name": "GEN A",
+              "kind": "generator",
+              "switchgear": "6.6SGG1",
+              "voltage": "6.6kV"
+            }
+          ],
+          "ways": [
+            {
+              "name": "22SGXX",
+              "head": "isolator",
+              "head_name": "22SGXX",
+              "devices": [
+                {
+                  "kind": "chiller",
+                  "name": "CH#1"
+                }
+              ]
+            },
+            {
+              "name": "6.6SG33E",
+              "head": "switchgear",
+              "dest_label": "FAC 3",
+              "dest_detail": "TX33E"
+            },
+            {
+              "name": "6.6SG31E",
+              "head": "switchgear",
+              "dest_label": "FAC 1",
+              "dest_detail": "TX31E"
+            },
+            {
+              "name": "CH#7",
+              "head": "isolator",
+              "head_name": "",
+              "devices": [
+                {
+                  "kind": "chiller",
+                  "name": "CH#7"
+                }
+              ]
+            },
+            {
+              "name": "CH#5",
+              "head": "isolator",
+              "head_name": "",
+              "devices": [
+                {
+                  "kind": "chiller",
+                  "name": "CH#5"
+                }
+              ]
+            },
+            {
+              "name": "CH#3",
+              "head": "isolator",
+              "head_name": "",
+              "devices": [
+                {
+                  "kind": "chiller",
+                  "name": "CH#3"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Section B",
+          "width": 1174,
+          "pad_left": 200,
+          "feeders": [
+            {
+              "name": "GEN B",
+              "kind": "generator",
+              "switchgear": "6.6SGG2",
+              "voltage": "6.6kV"
+            }
+          ],
+          "ways": [
+            {
+              "name": "CH#2",
+              "head": "isolator",
+              "head_name": "",
+              "devices": [
+                {
+                  "kind": "chiller",
+                  "name": "CH#2"
+                }
+              ]
+            },
+            {
+              "name": "CH#6",
+              "head": "isolator",
+              "head_name": "",
+              "devices": [
+                {
+                  "kind": "chiller",
+                  "name": "CH#6"
+                }
+              ]
+            },
+            {
+              "name": "CH#8",
+              "head": "isolator",
+              "head_name": "",
+              "devices": [
+                {
+                  "kind": "chiller",
+                  "name": "CH#8"
+                }
+              ]
+            },
+            {
+              "name": "6.6SG34E",
+              "head": "switchgear",
+              "dest_label": "FAC 4",
+              "dest_detail": "TX34E"
+            },
+            {
+              "name": "6.6SG35E",
+              "head": "switchgear",
+              "dest_label": "FAC 5",
+              "dest_detail": "TX35E"
+            }
+          ]
+        },
+        {
+          "name": "Section C",
+          "feeders": [
+            {
+              "name": "GEN C",
+              "kind": "generator",
+              "switchgear": "6.6SGG3",
+              "voltage": "6.6kV"
+            }
+          ],
+          "ways": [
+            {
+              "name": "6.6SG36E",
+              "head": "switchgear",
+              "dest_label": "EQ 1",
+              "dest_detail": "TX36E"
+            }
+          ]
+        },
+        {
+          "name": "Section D",
+          "feeders": [
+            {
+              "name": "GEN D",
+              "kind": "generator",
+              "switchgear": "6.6SGG4",
+              "voltage": "6.6kV"
+            }
+          ],
+          "ways": [
+            {
+              "name": "6.6SG37E",
+              "head": "switchgear",
+              "dest_label": "Spare",
+              "dest_detail": "TX37E"
+            },
+            {
+              "name": "CH#4",
+              "head": "isolator",
+              "head_name": "",
+              "devices": [
+                {
+                  "kind": "chiller",
+                  "name": "CH#4"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "couplers": [
+        {
+          "name": "6.6SGBS1",
+          "left": "Section A",
+          "right": "Section B",
+          "closed": false
+        },
+        {
+          "name": "6.6SGBS2",
+          "left": "Section B",
+          "right": "Section C",
+          "closed": false
+        },
+        {
+          "name": "6.6SGBS3",
+          "left": "Section C",
+          "right": "Section D",
+          "closed": false
+        }
+      ]
+    },
+    {
+      "name": "22KV - EXT LHS Switchboard",
+      "voltage": "22kV",
+      "phases": "3p",
+      "frequency": "50Hz",
+      "current_a": 1250,
+      "fault_ka": 25,
+      "sections": [
+        {
+          "name": "Section A",
+          "feeders": [
+            {
+              "name": "22SGA01",
+              "switchgear": "22SGA01",
+              "voltage": "22kV",
+              "source": "Incomer",
+              "taps": "22SG35"
+            }
+          ],
+          "ways": [
+            {
+              "name": "22SGA06",
+              "head": "switchgear",
+              "dest_label": "Spare"
+            },
+            {
+              "name": "22SGA05",
+              "head": "switchgear",
+              "feeds": "6.6KV - EXT Switchboard",
+              "devices": [
+                {
+                  "kind": "transformer",
+                  "name": "TX03",
+                  "ratio": "22kV / 6.6kV"
+                }
+              ]
+            },
+            {
+              "name": "22SGA04",
+              "head": "switchgear",
+              "dest_label": "SG-GAS-C"
+            },
+            {
+              "name": "22SGA03",
+              "head": "switchgear",
+              "dest_label": "SG-GAS-A"
+            },
+            {
+              "name": "22SGA02",
+              "head": "switchgear",
+              "dest_label": "FAC 2",
+              "dest_detail": "TX07"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "22KV - EXT RHS Switchboard",
+      "voltage": "22kV",
+      "phases": "3p",
+      "frequency": "50Hz",
+      "current_a": 1250,
+      "fault_ka": 25,
+      "sections": [
+        {
+          "name": "Section A",
+          "feeders": [
+            {
+              "name": "22SGB01",
+              "switchgear": "22SGB01",
+              "voltage": "22kV",
+              "source": "Incomer",
+              "taps": "22SG36"
+            }
+          ],
+          "ways": [
+            {
+              "name": "22SGB02",
+              "head": "switchgear",
+              "dest_label": "FAC 2",
+              "dest_detail": "TX08"
+            },
+            {
+              "name": "22SGB03",
+              "head": "switchgear",
+              "dest_label": "SG-GAS-B"
+            },
+            {
+              "name": "22SGB04",
+              "head": "switchgear",
+              "dest_label": "SG-GAS-D"
+            },
+            {
+              "name": "22SGB05",
+              "head": "switchgear",
+              "dest_label": "Spare"
+            },
+            {
+              "name": "22SGB06",
+              "head": "switchgear",
+              "dest_label": "Spare"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "6.6KV - EXT Switchboard",
+      "voltage": "6.6kV",
+      "phases": "3p",
+      "frequency": "50Hz",
+      "current_a": 1250,
+      "fault_ka": 25,
+      "sections": [
+        {
+          "name": "Section A",
+          "ways": [
+            {
+              "name": "CH#9",
+              "head": "isolator",
+              "head_name": "",
+              "devices": [
+                {
+                  "kind": "chiller",
+                  "name": "CH#9"
+                }
+              ]
+            },
+            {
+              "name": "CH#10",
+              "head": "isolator",
+              "head_name": "",
+              "devices": [
+                {
+                  "kind": "chiller",
+                  "name": "CH#10"
+                }
+              ]
+            },
+            {
+              "name": "SPARE",
+              "head": "isolator",
+              "dest_label": "Spare"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -20,6 +20,8 @@ func (s *Server) routesHV(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/hv/refs", s.handleHVRefs)
 	mux.HandleFunc("POST /api/hv/networks", s.requireRole(model.RoleSupervisor, s.handleHVNetworkCreate))
 	mux.HandleFunc("DELETE /api/hv/networks/{id}", s.requireRole(model.RoleSupervisor, s.handleHVNetworkDelete))
+	mux.HandleFunc("GET /api/hv/templates", s.handleHVTemplates)
+	mux.HandleFunc("POST /api/hv/templates/{key}", s.requireRole(model.RoleSupervisor, s.handleHVTemplateCreate))
 
 	mux.HandleFunc("POST /api/hv/switchboards", s.requireRole(model.RoleSupervisor, s.handleHVBoardCreate))
 	mux.HandleFunc("PUT /api/hv/switchboards/{id}", s.requireRole(model.RoleSupervisor, s.handleHVBoardUpdate))
@@ -161,11 +163,43 @@ func (s *Server) handleHVNetworkDelete(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	if err := s.Store.DeleteHVNetwork(ctx(r), roleOf(r), id); err != nil {
+	// Everything on it goes too only when the request says so in as many words,
+	// which the interface does once the drawing's name has been typed back.
+	all := r.URL.Query().Get("everything") == "yes"
+	if err := s.Store.DeleteHVNetwork(ctx(r), roleOf(r), id, all); err != nil {
 		fail(w, err)
 		return
 	}
 	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+// handleHVTemplates lists the ready-made drawings that can be put down whole.
+func (s *Server) handleHVTemplates(w http.ResponseWriter, r *http.Request) {
+	list, err := db.HVTemplates()
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, list)
+}
+
+// handleHVTemplateCreate puts a ready-made drawing down as a new drawing.
+func (s *Server) handleHVTemplateCreate(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Name string `json:"name"`
+	}
+	if r.ContentLength != 0 {
+		if err := decode(r, &in); err != nil {
+			fail(w, err)
+			return
+		}
+	}
+	id, err := s.Store.CreateHVNetworkFromTemplate(ctx(r), roleOf(r), r.PathValue("key"), strings.TrimSpace(in.Name))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 201, map[string]int64{"id": id})
 }
 
 // Feeders -----------------------------------------------------------------
