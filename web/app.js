@@ -1263,11 +1263,20 @@
     const tappedBy = {};
     let tapCount = 0;
     // How far along its board each way stands, so a board tapping one can be
-    // set out on that side of it.
+    // set out on that side of it. That is where it is drawn, not the order it
+    // was added in: a way dragged to the end of the bar is at the end of it.
     const alongBoard = {};
     (net.switchboards || []).forEach(b => {
-      const ways = b.sections.flatMap(sec => sec.ways);
-      ways.forEach((w, i) => { alongBoard[w.id] = (i + 0.5) / ways.length; });
+      const n = b.sections.length || 1;
+      b.sections.forEach((sec, si) => {
+        const auto = sec.ways.filter(w => w.offset_x == null);
+        sec.ways.forEach(w => {
+          const inSec = w.offset_x != null
+            ? Math.min(1, Math.max(0, Number(w.offset_x)))
+            : (auto.indexOf(w) + 0.5) / auto.length;
+          alongBoard[w.id] = (si + inSec) / n;
+        });
+      });
     });
     (net.switchboards || []).forEach(b => b.sections.forEach(sec => sec.feeders.forEach(f => {
       const src = sourceOf(f);
