@@ -1027,10 +1027,17 @@ func (s *Store) DeleteHVWay(ctx context.Context, role string, id int64) error {
 // PlaceHVWayAt puts a way at a place of its own along a bus section, as a
 // fraction of that section's width, rather than in the row of evenly spaced
 // slots. A nil offset hands it back to the automatic spacing.
-func (s *Store) PlaceHVWayAt(ctx context.Context, role string, id, sectionID int64, offset *float64) error {
+//
+// An index, when given, also puts the way at that place in its section's order
+// - counted among the ways on its own side of the bar - so the order the ways
+// are kept in is the order they are drawn in, and any way still spaced by the
+// drawing is fitted in between the right neighbours.
+func (s *Store) PlaceHVWayAt(ctx context.Context, role string, id, sectionID int64, offset *float64, index *int) error {
 	return s.withTx(ctx, func(tx pgx.Tx) error {
-		var name string
-		if err := tx.QueryRow(ctx, `SELECT name FROM hv_ways WHERE id = $1`, id).Scan(&name); err != nil {
+		var name, side string
+		var from int64
+		if err := tx.QueryRow(ctx, `SELECT name, section_id, side FROM hv_ways WHERE id = $1`, id).
+			Scan(&name, &from, &side); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrNotFound
 			}
@@ -1040,6 +1047,15 @@ func (s *Store) PlaceHVWayAt(ctx context.Context, role string, id, sectionID int
 			section_id = coalesce(nullif($3::bigint, 0), section_id), updated_at = now()
 			WHERE id = $1`, id, offset, sectionID); err != nil {
 			return err
+		}
+		if index != nil {
+			to := sectionID
+			if to == 0 {
+				to = from
+			}
+			if err := restackWay(ctx, tx, id, from, to, *index, side); err != nil {
+				return err
+			}
 		}
 		return s.audit(ctx, tx, role, "update", "hv_way", id, "Placed way "+name+" on the busbar")
 	})
@@ -1092,40 +1108,49 @@ func (s *Store) PlaceHVWay(ctx context.Context, role string, id, sectionID int64
 		if _, err := tx.Exec(ctx, `UPDATE hv_ways SET side = $2 WHERE id = $1`, id, side); err != nil {
 			return err
 		}
-		// The ways on a section are stored left side first, then right, so an
-		// index within a side is an index into that side's own run.
-		run, err := wayOrder(ctx, tx, to, id)
-		if err != nil {
+		if err := restackWay(ctx, tx, id, from, to, index, side); err != nil {
 			return err
-		}
-		left, right, err := splitBySide(ctx, tx, `hv_ways`, run)
-		if err != nil {
-			return err
-		}
-		if side == model.SideRight {
-			right = insertAt(right, id, index)
-		} else {
-			left = insertAt(left, id, index)
-		}
-		for i, wid := range append(left, right...) {
-			if _, err := tx.Exec(ctx, `UPDATE hv_ways SET section_id = $2, position = $3, updated_at = now()
-				WHERE id = $1`, wid, to, i); err != nil {
-				return err
-			}
-		}
-		if to != from {
-			left, err := wayOrder(ctx, tx, from, 0)
-			if err != nil {
-				return err
-			}
-			for i, wid := range left {
-				if _, err := tx.Exec(ctx, `UPDATE hv_ways SET position = $2 WHERE id = $1`, wid, i); err != nil {
-					return err
-				}
-			}
 		}
 		return s.audit(ctx, tx, role, "update", "hv_way", id, "Moved way "+name+" to "+secName)
 	})
+}
+
+// restackWay puts a way at an index in the order of the section it is now on,
+// and closes up the order of the section it came from.
+func restackWay(ctx context.Context, tx pgx.Tx, id, from, to int64, index int, side string) error {
+	// The ways on a section are stored left side first, then right, so an
+	// index within a side is an index into that side's own run.
+	run, err := wayOrder(ctx, tx, to, id)
+	if err != nil {
+		return err
+	}
+	left, right, err := splitBySide(ctx, tx, `hv_ways`, run)
+	if err != nil {
+		return err
+	}
+	if side == model.SideRight {
+		right = insertAt(right, id, index)
+	} else {
+		left = insertAt(left, id, index)
+	}
+	for i, wid := range append(left, right...) {
+		if _, err := tx.Exec(ctx, `UPDATE hv_ways SET section_id = $2, position = $3, updated_at = now()
+			WHERE id = $1`, wid, to, i); err != nil {
+			return err
+		}
+	}
+	if to != from {
+		left, err := wayOrder(ctx, tx, from, 0)
+		if err != nil {
+			return err
+		}
+		for i, wid := range left {
+			if _, err := tx.Exec(ctx, `UPDATE hv_ways SET position = $2 WHERE id = $1`, wid, i); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // splitBySide divides a run of ids into the ones on the left of a bar and the

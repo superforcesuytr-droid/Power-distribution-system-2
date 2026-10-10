@@ -372,6 +372,10 @@ type hvPlaceInput struct {
 	OffsetX *float64 `json:"offset_x"`
 	// Auto hands a column back to the automatic spacing.
 	Auto bool `json:"auto"`
+	// Order, given with OffsetX, is how many of the ways on that side of the
+	// section are drawn to the left of where the way was dropped, so the order
+	// it is kept in follows where it was put.
+	Order *int `json:"order"`
 }
 
 func (s *Server) handleHVFeederPlace(w http.ResponseWriter, r *http.Request) {
@@ -662,7 +666,7 @@ func (s *Server) handleHVWayPlace(w http.ResponseWriter, r *http.Request) {
 		if in.Auto {
 			in.OffsetX = nil
 		}
-		if err := s.Store.PlaceHVWayAt(ctx(r), roleOf(r), id, in.SectionID, in.OffsetX); err != nil {
+		if err := s.Store.PlaceHVWayAt(ctx(r), roleOf(r), id, in.SectionID, in.OffsetX, in.Order); err != nil {
 			fail(w, err)
 			return
 		}

@@ -951,15 +951,18 @@
     // Where a dot may not go: within touching distance of one already on that
     // length of bar. The nearest free place on either side is taken instead, so
     // a column dropped on top of another lands beside it rather than under it.
+    // A column hanging under the bar needs a whole column of room from the
+    // others hanging there, not only a dot's, or its box and symbols land on
+    // theirs; from an incomer above the bar a dot's room is enough.
     const clearOf = (x, taken, lo, hi) => {
-      const min = (hvLayout && hvLayout.minDot) || 26;
-      const free = v => v >= lo - 0.5 && v <= hi + 0.5 && !taken.some(t => Math.abs(t - v) < min);
+      const reach = taken.reduce((m, t) => Math.max(m, t.min), 0);
+      const free = v => v >= lo - 0.5 && v <= hi + 0.5 && !taken.some(t => Math.abs(t.x - v) < t.min);
       if (free(x)) return x;
-      for (let step = GRID; step <= (hi - lo) + min; step += GRID) {
+      for (let step = GRID; step <= (hi - lo) + reach; step += GRID) {
         if (free(x - step)) return x - step;
         if (free(x + step)) return x + step;
       }
-      return x;
+      return null;
     };
     const slotAt = (cx, cy, kind, id) => {
       const p = toSvg(cx, cy);
@@ -974,9 +977,20 @@
       if (!best || bestGap > 140) return null;
       const from = best.secLeft + Math.round((p.x - best.secLeft) / GRID) * GRID;
       const near = Math.min(best.secLeft + best.secWidth, Math.max(best.secLeft, from));
+      const dot = (hvLayout.minDot || 26), col = (hvLayout.minCol || 170);
+      const self = Object.values(hvLayout.dots || {}).flat().find(d => d.kind === kind && d.id === id);
+      const under = self ? self.under : kind === 'way';
       const taken = ((hvLayout.dots || {})[best.sectionId] || [])
-        .filter(d => !(d.kind === kind && d.id === id)).map(d => d.x);
-      const x = clearOf(near, taken, best.secLeft, best.secLeft + best.secWidth);
+        .filter(d => !(d.kind === kind && d.id === id))
+        .map(d => ({ x: d.x, min: under && d.under ? col : dot }));
+      const clear = clearOf(near, taken, best.secLeft, best.secLeft + best.secWidth);
+      // A way dropped among others with no room there for it - onto an evenly
+      // spaced run, say - is not sent off to whatever gap is nearest: it takes
+      // its place in the order at that point and is spaced out with the rest.
+      if (kind === 'way' && (clear == null || Math.abs(clear - near) > col / 2)) {
+        return { sectionId: best.sectionId, name: best.name, x: near, offset: null, y: best.top, h: best.bottom - best.top };
+      }
+      const x = clear == null ? near : clear;
       return {
         sectionId: best.sectionId, name: best.name, x,
         offset: (x - best.secLeft) / best.secWidth,
@@ -1114,9 +1128,18 @@
         if (!d.zone) { unshift(); return; }
         // The slot counts the columns as drawn, so a column moving right
         // within its own section passes over its own place on the way.
+        // A way also takes its place in the order of the ways on that side of
+        // the bar, so the order it is kept in is the order it is drawn in.
+        const body = d.zone.offset == null ? { section_id: d.zone.sectionId, auto: true }
+          : { section_id: d.zone.sectionId, offset_x: Number(d.zone.offset.toFixed(5)) };
+        if (d.column === 'way') {
+          const dots = Object.values(hvLayout.dots || {}).flat();
+          const self = dots.find(o => o.kind === 'way' && o.id === d.id);
+          body.order = ((hvLayout.dots || {})[d.zone.sectionId] || [])
+            .filter(o => o.kind === 'way' && o.id !== d.id && (o.side === 'r') === ((self && self.side) === 'r') && o.x < d.zone.x).length;
+        }
         try {
-          await api('POST', `/api/hv/${d.column === 'way' ? 'ways' : 'feeders'}/${d.id}/place`,
-            { section_id: d.zone.sectionId, offset_x: Number(d.zone.offset.toFixed(5)) });
+          await api('POST', `/api/hv/${d.column === 'way' ? 'ways' : 'feeders'}/${d.id}/place`, body);
           await afterChange(d.label + ' moved');
         } catch (err) { unshift(); toast(err.message, 'error'); }
         return;
@@ -1203,6 +1226,10 @@
     const ROUTE_ROW = 18, STEP_ROWS = 3;
     // How close two dots on the busbar may come before they read as one.
     const MIN_DOT = 26;
+    // How close two columns hanging under the bar may come: the whole reach of
+    // one, from its designation on the left to the button fitting another
+    // device on the right, with its box under it at a readable width.
+    const WAY_MIN = 170;
     // Room enough that a symbol and its rotated designation never crowd the
     // next one down the conductor.
     const devHeight = d => (d.kind === 'transformer' ? 84 : (d.kind === 'chiller' ? 88 : 58));
@@ -1218,6 +1245,35 @@
       let h = 0;
       (list || []).forEach((d, i) => { if (!(i === 0 && isHead(d))) h += devHeight(d); });
       return h;
+    };
+    // Spread points along a line so no two are closer than gap, keeping their
+    // order and moving them as little as can be: points that crowd one another
+    // are taken as one group, which sits where it is nearest all of them. The
+    // result is then held between lo and hi where there is room for it.
+    const spreadApart = (items, gap, lo, hi) => {
+      const sorted = items.slice().sort((a, b) => a.x - b.x);
+      const groups = [];
+      sorted.forEach(it => {
+        groups.push({ items: [it], sum: it.x, n: 1 });
+        for (;;) {
+          const b = groups[groups.length - 1], a = groups[groups.length - 2];
+          // A group is held by where its first point would sit: the mean of
+          // each point less the gaps before it within the group.
+          if (!a || b.sum / b.n >= a.sum / a.n + a.n * gap - 0.01) break;
+          a.sum += b.sum - b.n * a.n * gap;
+          a.items = a.items.concat(b.items);
+          a.n += b.n;
+          groups.pop();
+        }
+      });
+      const xs = [];
+      groups.forEach(gp => {
+        const first = gp.sum / gp.n;
+        gp.items.forEach((_, k) => xs.push(first + k * gap));
+      });
+      for (let i = 0; i < xs.length; i++) xs[i] = Math.max(xs[i], i ? xs[i - 1] + gap : lo);
+      for (let i = xs.length - 1; i >= 0; i--) xs[i] = Math.min(xs[i], i < xs.length - 1 ? xs[i + 1] - gap : hi);
+      sorted.forEach((it, i) => { if (Math.abs(it.x - xs[i]) > 0.01) it.set(xs[i]); });
     };
 
     // Each switchboard is laid out on its own and they are stacked down the
@@ -1295,8 +1351,13 @@
       plan.autoU = plan.under.filter(f => f.offset_x == null);
       plan.autoW = sec.ways.filter(w => w.offset_x == null);
       plan.pad = Math.max(0, Number(sec.pad_left) || 0);
+      // A bar is as long as every column hanging under it needs, whether it is
+      // spaced out by the drawing or was put where it is by hand. Counting only
+      // the evenly spaced ones made the bar shrink as soon as one was dragged
+      // out of the run, and everything placed by hand - kept as a fraction of
+      // that length - slid along with it into its neighbours.
       if (!sided) {
-        const nf = Math.max(1, plan.autoF.length), nw = Math.max(1, plan.autoW.length + plan.autoU.length);
+        const nf = Math.max(1, plan.autoF.length), nw = Math.max(1, sec.ways.length + plan.under.length);
         plan.min = Math.max(nf * FEEDER_W, runW(nw), 420);
         plan.width = Math.max(plan.min + plan.pad, Number(sec.width) || 0);
         return plan;
@@ -1308,8 +1369,8 @@
       plan.lu = split(plan.under, 'l');
       plan.ru = split(plan.under, 'r');
       plan.bandW = Math.max(1, plan.autoF.length) * FEEDER_W;
-      plan.lwW = runW(plan.lw.filter(w => w.offset_x == null).length + plan.lu.filter(f => f.offset_x == null).length);
-      plan.rwW = runW(plan.rw.filter(w => w.offset_x == null).length + plan.ru.filter(f => f.offset_x == null).length);
+      plan.lwW = runW(plan.lw.length + plan.lu.length);
+      plan.rwW = runW(plan.rw.length + plan.ru.length);
       plan.min = Math.max(plan.bandW + plan.lwW + plan.rwW + SIDE_PAD * 2, 420);
       plan.width = Math.max(plan.min + plan.pad, Number(sec.width) || 0);
       return plan;
@@ -1520,9 +1581,12 @@
         const at = new Map();
         const key = (kind, id) => kind + ':' + id;
         sg.groups = [];
+        // What hangs under the bar keeps a slot in the run for every column,
+        // placed by hand or not, so moving one leaves the rest where they were.
         const lay = (list, kind, side, start, pitch, colW, band) => {
           const auto = list.filter(item => item.offset_x == null);
-          auto.forEach((item, k) => at.set(key(kind, item.id), start + k * pitch + colW / 2));
+          const slotted = (band || (kind === 'way' ? 'below' : 'above')) === 'below' ? list : auto;
+          slotted.forEach((item, k) => { if (item.offset_x == null) at.set(key(kind, item.id), start + k * pitch + colW / 2); });
           const width = auto.length ? auto.length * pitch - (pitch - colW) : colW;
           sg.groups.push({
             kind, side, band: band || (kind === 'way' ? 'below' : 'above'),
@@ -1541,15 +1605,15 @@
           return sb && sb.left + sb.contentW / 2 < mid;
         });
         if (!sg.sided) {
-          const nf = sg.autoF.length, nw = sg.autoW.length + sg.autoU.length;
+          const nf = sg.autoF.length, nw = sg.sec.ways.length + sg.under.length;
           const runL = sg.cx - runW(nw) / 2;
           lay(sg.over, 'feeder', '', sg.cx - nf * FEEDER_W / 2, FEEDER_W, FEEDER_W);
           if (fedFromLeft) {
             lay(sg.under, 'feeder', '', runL, WAY_PITCH, WAY_W, 'below');
-            lay(sg.sec.ways, 'way', '', runL + sg.autoU.length * WAY_PITCH, WAY_PITCH, WAY_W);
+            lay(sg.sec.ways, 'way', '', runL + sg.under.length * WAY_PITCH, WAY_PITCH, WAY_W);
           } else {
             lay(sg.sec.ways, 'way', '', runL, WAY_PITCH, WAY_W);
-            lay(sg.under, 'feeder', '', runL + sg.autoW.length * WAY_PITCH, WAY_PITCH, WAY_W, 'below');
+            lay(sg.under, 'feeder', '', runL + sg.sec.ways.length * WAY_PITCH, WAY_PITCH, WAY_W, 'below');
           }
         } else {
           const spare = sg.inW - (sg.bandW + sg.lwW + sg.rwW);
@@ -1558,19 +1622,59 @@
           const lwL = sg.inL + Math.max(0, (spare - pad * 2) / 2);
           const rwL = bandLeft + sg.bandW + pad;
           lay(sg.lw, 'way', 'l', lwL, WAY_PITCH, WAY_W);
-          lay(sg.lu, 'feeder', 'l', lwL + sg.lw.filter(w => w.offset_x == null).length * WAY_PITCH, WAY_PITCH, WAY_W, 'below');
+          lay(sg.lu, 'feeder', 'l', lwL + sg.lw.length * WAY_PITCH, WAY_PITCH, WAY_W, 'below');
           lay(sg.lf, 'feeder', 'l', bandLeft, FEEDER_W, FEEDER_W);
           lay(sg.rf, 'feeder', 'r', bandLeft + sg.lf.length * FEEDER_W, FEEDER_W, FEEDER_W);
           lay(sg.rw, 'way', 'r', rwL, WAY_PITCH, WAY_W);
-          lay(sg.ru, 'feeder', 'r', rwL + sg.rw.filter(w => w.offset_x == null).length * WAY_PITCH, WAY_PITCH, WAY_W, 'below');
+          lay(sg.ru, 'feeder', 'r', rwL + sg.rw.length * WAY_PITCH, WAY_PITCH, WAY_W, 'below');
         }
         // A column placed by hand sits exactly where it was put, as a fraction
         // of the section's width, and takes no slot from the rest.
         const placed = item => sg.left + Math.min(1, Math.max(0, Number(item.offset_x))) * sg.width;
         sg.sec.feeders.forEach(f => { if (f.offset_x != null) at.set(key('feeder', f.id), placed(f)); });
         sg.sec.ways.forEach(w => { if (w.offset_x != null) at.set(key('way', w.id), placed(w)); });
+        // A way not placed by hand stays in its own slot, unless a way placed
+        // by hand has ended up on the far side of it from where the order puts
+        // it. Then the ways between two placed ones are spaced out between
+        // them, and those beyond the first or last placed one run on from it,
+        // so the bar always reads in the order the ways are kept in rather than
+        // a way landing among others it does not stand beside.
+        ['', 'l', 'r'].forEach(side => {
+          const run = sg.sec.ways.filter(w => (sg.sided ? (w.side === 'r' ? 'r' : 'l') : '') === side);
+          const anchors = run.map((w, i) => (w.offset_x != null ? i : -1)).filter(i => i >= 0);
+          if (!anchors.length || anchors.length === run.length) return;
+          const xAt = i => at.get(key('way', run[i].id));
+          // Each stretch of ways between two placed ones, or before the first or
+          // after the last, is left alone if it already sits in order between them.
+          [-1].concat(anchors).forEach((before, n) => {
+            const after = n < anchors.length ? anchors[n] : run.length;
+            const lo = before >= 0 ? xAt(before) : -Infinity;
+            const hi = after < run.length ? xAt(after) : Infinity;
+            const idx = [];
+            for (let i = before + 1; i < after; i++) idx.push(i);
+            if (!idx.length) return;
+            const homes = idx.map(xAt);
+            if (homes.every((x, k) => x > lo && x < hi && (!k || x > homes[k - 1]))) return;
+            idx.forEach(i => {
+              let x;
+              if (before < 0) x = hi - (after - i) * WAY_PITCH;
+              else if (after >= run.length) x = lo + (i - before) * WAY_PITCH;
+              else x = lo + (hi - lo) * (i - before) / (after - before);
+              at.set(key('way', run[i].id), x);
+            });
+          });
+        });
         sg.feederX = sg.sec.feeders.map(f => at.get(key('feeder', f.id)));
         sg.wayX = sg.sec.ways.map(w => at.get(key('way', w.id)));
+        // Whatever hangs under the bar - ways, and incomers fed from a way -
+        // is kept a whole column apart, however it was placed, so no column's
+        // symbols, designation or box ever lands on its neighbour's and every
+        // conductor runs straight down into its own box. They keep their order
+        // and move as little as they can to make that room.
+        const hanging = sg.sec.ways.map((w, i) => ({ x: sg.wayX[i], set: x => { sg.wayX[i] = x; } }))
+          .concat(sg.sec.feeders.map((f, i) => (sourceOf(f) ? { x: sg.feederX[i], set: x => { sg.feederX[i] = x; } } : null)))
+          .filter(c => c && c.x != null);
+        spreadApart(hanging, WAY_MIN, sg.left, sg.left + sg.width);
         // A dot on the bar is where one thing lands on it, and two of them
         // touching reads as one. The ways keep the even spacing of their run;
         // an incomer that would land on a dot already there steps clear of it.
@@ -1587,8 +1691,10 @@
         });
         // Every dot on this length of bar, so a column dragged along it can be
         // dropped clear of the ones already there.
-        sg.dots = sg.sec.feeders.map((f, i) => ({ kind: 'feeder', id: f.id, x: sg.feederX[i] }))
-          .concat(sg.sec.ways.map((w, i) => ({ kind: 'way', id: w.id, x: sg.wayX[i] })))
+        // Those hanging under it are marked so, since they need a whole column
+        // of room from one another rather than only a dot's.
+        sg.dots = sg.sec.feeders.map((f, i) => ({ kind: 'feeder', id: f.id, x: sg.feederX[i], under: !!sourceOf(f) }))
+          .concat(sg.sec.ways.map((w, i) => ({ kind: 'way', id: w.id, x: sg.wayX[i], under: true, side: w.side || '' })))
           .filter(d => d.x != null);
         x += sg.width + SECTION_GAP;
       });
@@ -1624,7 +1730,7 @@
     // run per kind, and per side where a bar is fed from both ends. Every run
     // carries its own band, because the boards are stacked and a point on the
     // page belongs to one board's ways or another's incomers.
-    hvLayout = { groups: [], dots: {}, spans: {}, minDot: MIN_DOT };
+    hvLayout = { groups: [], dots: {}, spans: {}, minDot: MIN_DOT, minCol: WAY_MIN };
     boards.forEach(g => g.secs.forEach(sg => {
       hvLayout.dots[sg.sec.id] = sg.dots;
       hvLayout.spans[sg.sec.id] = { left: sg.left, width: sg.width, min: sg.min, pad: sg.pad || 0, busY: g.busY };
