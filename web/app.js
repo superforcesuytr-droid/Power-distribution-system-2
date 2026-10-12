@@ -49,6 +49,31 @@
     const label = { active: 'Active', maintenance: 'Maintenance', inactive: 'Inactive' }[s] || s;
     return `<span class="status status-${esc(s)}">${esc(label)}</span>`;
   }
+  // What engineers record against an MCCB or MCB, so one that is down can be
+  // seen at a glance and someone sent to it.
+  const BREAKER_STATUS = {
+    in_service: { label: 'In service', color: '#0f8a4f', soft: '#f2fbf6' },
+    maintenance: { label: 'Under maintenance', color: '#d97a06', soft: '#fff6e8' },
+    faulted: { label: 'Faulted', color: '#d32f2f', soft: '#fdecec' },
+  };
+  const breakerState = item => BREAKER_STATUS[(item && item.status) || 'in_service'] || BREAKER_STATUS.in_service;
+  // Who is on it, what is going on and since when, for a tooltip.
+  function breakerStatusTitle(item) {
+    const st = breakerState(item);
+    return [st.label, item.assigned_to ? 'assigned to ' + item.assigned_to : '', item.status_note,
+      item.status_at ? 'since ' + fmtDateTime(item.status_at) : ''].filter(Boolean).join(' · ');
+  }
+  // The status shown on a breaker on the dashboard. Anyone who can edit can
+  // click it to change it.
+  function breakerStatusBadge(kind, item) {
+    const st = breakerState(item);
+    const s = item.status || 'in_service';
+    const who = item.assigned_to && s !== 'in_service' ? ` · ${esc(item.assigned_to)}` : '';
+    const attrs = canEdit() ? `data-action="breaker-status" data-kind="${kind}" data-id="${item.id}"` : '';
+    return `<${canEdit() ? 'button type="button"' : 'span'} class="bstatus bstatus-${s}" ${attrs}
+      title="${esc(breakerStatusTitle(item))}${canEdit() ? ' - click to update' : ''}"><i></i>${esc(st.label)}${who}</${canEdit() ? 'button' : 'span'}>`;
+  }
+
   const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
 
   const RANK = { viewer: 1, technician: 2, supervisor: 3 };
@@ -336,6 +361,8 @@
         </div>
       </div>
 
+      ${breakerAlerts(b)}
+
       <div class="totals">
         <span class="cap">CURRENT TOTALS</span>
         <div class="tot"><span class="l">Total Current</span><span class="v ${levelClass(t.util_level)}">${fmtA(t.total_current)}<span class="unit">A</span></span></div>
@@ -364,14 +391,36 @@
     </div>`;
   }
 
+  // Every breaker on the board that is not in service, faulted first, so the
+  // ones needing someone are listed at the top of the board and a click takes
+  // you to each.
+  function breakerAlerts(b) {
+    const down = [];
+    b.mccbs.forEach(m => {
+      if (m.status && m.status !== 'in_service') down.push({ kind: 'mccb', item: m });
+      m.mcbs.forEach(mb => { if (mb.status && mb.status !== 'in_service') down.push({ kind: 'mcb', item: mb, under: m.name }); });
+    });
+    if (!down.length) return '';
+    down.sort((x, y) => (x.item.status === 'faulted' ? 0 : 1) - (y.item.status === 'faulted' ? 0 : 1));
+    const faulted = down.filter(d => d.item.status === 'faulted').length;
+    const maint = down.length - faulted;
+    return `<div class="breaker-alerts ${faulted ? 'has-fault' : ''}">
+      <div class="ba-head">${faulted ? `<b class="ba-fault">${plural(faulted, 'breaker')} faulted</b>` : ''}${faulted && maint ? ' · ' : ''}${maint ? `<b class="ba-maint">${plural(maint, 'breaker')} under maintenance</b>` : ''}</div>
+      <div class="ba-list">${down.map(d => `<button type="button" class="ba-item bstatus-${d.item.status}" data-action="open-node" data-focus="${d.kind}-${d.item.id}" title="${esc(breakerStatusTitle(d.item))}">
+        <i></i><b>${esc(d.item.name)}</b>${d.under ? `<span class="muted"> under ${esc(d.under)}</span>` : ''}
+        <span>${esc(breakerState(d.item).label)}${d.item.assigned_to ? ' · ' + esc(d.item.assigned_to) : ' · nobody assigned'}</span></button>`).join('')}</div>
+    </div>`;
+  }
+
   function mccbSection(m) {
     const collapsed = state.collapsed.has('mccb-' + m.id);
     return `
-      <div class="mccb ${collapsed ? 'collapsed' : ''}" id="mccb-${m.id}">
+      <div class="mccb ${collapsed ? 'collapsed' : ''} is-${m.status || 'in_service'}" id="mccb-${m.id}">
         <div class="mccb-head">
           <span class="caret" data-action="toggle-mccb" data-id="${m.id}">▼</span>
           <span class="name">${esc(m.name)}</span>
           <span class="pill pill-blue">${fmtA(m.rating_a)}A</span>
+          ${breakerStatusBadge('mccb', m)}
           ${m.maintenance_circuits ? `<span class="warn-badge">⚠ ${m.maintenance_circuits} maintenance</span>` : ''}
           <span class="stat"><b>${m.mcb_count}</b> ${m.mcb_count === 1 ? 'MCB' : 'MCBs'}</span>
           <span class="stat"><b>${m.circuit_count}</b> ${m.circuit_count === 1 ? 'circuit' : 'circuits'}</span>
@@ -393,10 +442,11 @@
 
   function mcbSection(mb) {
     return `
-      <div class="mcb" id="mcb-${mb.id}">
+      <div class="mcb is-${mb.status || 'in_service'}" id="mcb-${mb.id}">
         <div class="mcb-head">
           <span class="name">${esc(mb.name)}</span>
           <span class="rating">${fmtA(mb.rating_a)}A</span>
+          ${breakerStatusBadge('mcb', mb)}
           ${bar(mb.pct, mb.level)}
           <span class="cur ${levelClass(mb.level)}">${fmtA(mb.current)} A</span>
           <span class="cap">/ ${fmtA(mb.capacity)} A</span>
@@ -777,7 +827,7 @@
         m.pct, 'mccb-' + m.id, [
           edit ? { icon: 'edit', action: 'edit-mccb', id: m.id, title: 'Edit ' + m.name } : null,
           manage ? { icon: 'del', action: 'delete-mccb', id: m.id, title: 'Delete ' + m.name } : null,
-        ]));
+        ], { kind: 'mccb', item: m }));
 
       const n = m.mcbs.length;
       if (!n) {
@@ -803,7 +853,7 @@
           mb.pct, 'mcb-' + mb.id, [
             edit ? { icon: 'edit', action: 'edit-mcb', id: mb.id, title: 'Edit ' + mb.name } : null,
             manage ? { icon: 'del', action: 'delete-mcb', id: mb.id, title: 'Delete ' + mb.name } : null,
-          ]));
+          ], { kind: 'mcb', item: mb }));
       });
       // The "add MCB" control sits on the drop feeding this MCCB's sub-bus.
       if (edit) out.push(sldPill(cx, addMcbY, 74, '+ MCB', `data-action="add-mcb" data-id="${m.id}"`, col, 'Add an MCB under ' + m.name));
@@ -816,7 +866,7 @@
     function breakerSymbol(cx, cy, col) {
       return `<g transform="translate(${cx - 12} ${cy - 12})"><rect width="24" height="24" rx="4" fill="#fff" stroke="${col}" stroke-width="2.5"/><line x1="5" y1="19" x2="19" y2="5" stroke="${col}" stroke-width="2.5" stroke-linecap="round"/></g>`;
     }
-    function nodeBox(x, y, w, h, col, kind, title, lines, pct, focusId, actions) {
+    function nodeBox(x, y, w, h, col, kind, title, lines, pct, focusId, actions, breaker) {
       const pad = 16;
       let ty = y + 22;
       let t = `<text x="${x + pad}" y="${ty}" font-size="11" fill="#94a3b8" letter-spacing="1.5">${esc(kind)}</text>`;
@@ -832,9 +882,27 @@
       const btns = (actions || []).filter(Boolean);
       let bx = x + w - 12 - btns.length * 26 - (btns.length - 1) * 6;
       btns.forEach(a => { t += sldIconBtn(bx, y + 11, a.icon, a.action, a.id, a.title, col); bx += 32; });
+      // The breaker's status, on a tab across the top edge of its box. A breaker
+      // that is down has its whole box drawn in that status's colour, so it is
+      // what the eye lands on.
+      const st = breaker ? breakerState(breaker.item) : null;
+      const down = st && breaker.item.status && breaker.item.status !== 'in_service';
+      let tab = '';
+      if (st) {
+        const label = st.label.toUpperCase() + (down && breaker.item.assigned_to ? ' · ' + breaker.item.assigned_to : '');
+        const shown = label.length > 22 ? label.slice(0, 21) + '…' : label;
+        const tw = Math.min(w - pad * 2, 30 + shown.length * 7.3);
+        const tx = x + pad, ty0 = y - 10;
+        tab = `<g class="sld-btn" ${edit ? `data-action="breaker-status" data-kind="${breaker.kind}" data-id="${breaker.item.id}"` : ''}>
+          <title>${esc(breakerStatusTitle(breaker.item))}${edit ? ' - click to update' : ''}</title>
+          <rect x="${tx}" y="${ty0}" width="${tw}" height="20" rx="10" fill="${down ? st.color : '#fff'}" stroke="${st.color}" stroke-width="1.5"/>
+          <circle cx="${tx + 11}" cy="${ty0 + 10}" r="3.5" fill="${down ? '#fff' : st.color}"/>
+          <text x="${tx + 20}" y="${ty0 + 14}" font-size="10.5" font-weight="700" letter-spacing=".4" fill="${down ? '#fff' : st.color}">${esc(shown)}</text></g>`;
+      }
+      const stroke = down ? st.color : col;
       return `<g id="${focusId}" class="sld-node" data-action="open-node" data-focus="${focusId}">` +
-        `<title>${esc(title)} - click to open on the dashboard</title>` +
-        `<rect class="box" x="${x}" y="${y}" width="${w}" height="${h}" rx="10" fill="#f7fbfd" stroke="${col}" stroke-width="2.5"/>${t}</g>`;
+        `<title>${esc(title)}${st ? ' · ' + esc(breakerStatusTitle(breaker.item)) : ''} - click to open on the dashboard</title>` +
+        `<rect class="box" x="${x}" y="${y}" width="${w}" height="${h}" rx="10" fill="${down ? st.soft : '#f7fbfd'}" stroke="${stroke}" stroke-width="${down ? 3.5 : 2.5}"${down && breaker.item.status === 'maintenance' ? ' stroke-dasharray="9 5"' : ''}/>${t}${tab}</g>`;
     }
   }
 
@@ -2526,6 +2594,25 @@
       },
       isEdit && canManage() ? { deleteLabel: 'Delete ' + label, onDelete: () => deleteBreaker(kind, item) } : {});
   }
+  // Engineers keep each breaker's status up to date: in service, under
+  // maintenance or faulted, with who is attending to it and a note.
+  function breakerStatusForm(kind, item) {
+    if (!item) return;
+    const s = item.status || 'in_service';
+    formModal('Status of ' + item.name, `
+      ${field('Status', 'status', s, { type: 'select', required: true, full: true,
+        options: Object.entries(BREAKER_STATUS).map(([v, o]) => ({ value: v, label: o.label })) })}
+      ${field('Assigned to', 'assigned_to', item.assigned_to || '', { full: true, placeholder: 'Engineer attending to it', attrs: 'maxlength="120"' })}
+      ${field('Note', 'status_note', item.status_note || '', { type: 'textarea', full: true, attrs: 'maxlength="500" rows="3"',
+        hint: item.status_at ? 'Last updated ' + fmtDateTime(item.status_at) + '. Every change is kept in the activity log.' : 'Every change is kept in the activity log.' })}`,
+      async d => {
+        await api('PUT', `/api/${kind === 'mccb' ? 'mccbs' : 'mcbs'}/${item.id}/status`,
+          { status: d.status, assigned_to: d.assigned_to, status_note: d.status_note });
+        state.focus = kind + '-' + item.id;
+        await afterChange(item.name + ': ' + BREAKER_STATUS[d.status].label);
+      }, { submitLabel: 'Update status' });
+  }
+
   function suggestBreakerName(kind, parentId) {
     const b = state.board;
     if (!b) return '';
@@ -3192,6 +3279,7 @@
       case 'edit-board': boardForm(state.board); break;
       case 'add-mccb': breakerForm('mccb', null); break;
       case 'edit-mccb': breakerForm('mccb', findMCCB(id)); break;
+      case 'breaker-status': breakerStatusForm(el.dataset.kind, el.dataset.kind === 'mccb' ? findMCCB(id) : findMCB(id)); break;
       case 'delete-mccb': deleteBreaker('mccb', findMCCB(id)); break;
       case 'add-mcb': breakerForm('mcb', null, id); break;
       case 'edit-mcb': breakerForm('mcb', findMCB(id), findMCB(id).mccb_id); break;

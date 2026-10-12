@@ -83,10 +83,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/mccbs", s.requireRole(model.RoleTechnician, s.handleMCCBCreate))
 	mux.HandleFunc("PUT /api/mccbs/{id}", s.requireRole(model.RoleTechnician, s.handleMCCBUpdate))
 	mux.HandleFunc("DELETE /api/mccbs/{id}", s.requireRole(model.RoleSupervisor, s.handleMCCBDelete))
+	mux.HandleFunc("PUT /api/mccbs/{id}/status", s.requireRole(model.RoleTechnician, s.handleBreakerStatus("mccb")))
 
 	mux.HandleFunc("POST /api/mcbs", s.requireRole(model.RoleTechnician, s.handleMCBCreate))
 	mux.HandleFunc("PUT /api/mcbs/{id}", s.requireRole(model.RoleTechnician, s.handleMCBUpdate))
 	mux.HandleFunc("DELETE /api/mcbs/{id}", s.requireRole(model.RoleSupervisor, s.handleMCBDelete))
+	mux.HandleFunc("PUT /api/mcbs/{id}/status", s.requireRole(model.RoleTechnician, s.handleBreakerStatus("mcb")))
 
 	mux.HandleFunc("POST /api/circuits", s.requireRole(model.RoleTechnician, s.handleCircuitCreate))
 	mux.HandleFunc("PUT /api/circuits/{id}", s.requireRole(model.RoleTechnician, s.handleCircuitUpdate))
@@ -673,6 +675,39 @@ func (in breakerInput) validate(kind string) error {
 		return &db.UserError{Msg: "Rating must be between 0 and 10000 A."}
 	}
 	return nil
+}
+
+// handleBreakerStatus records the status an engineer has set on an MCCB or an
+// MCB: in service, under maintenance or faulted, with who is attending to it.
+func (s *Server) handleBreakerStatus(kind string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := pathID(r)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		var in model.BreakerStatus
+		if err := decode(r, &in); err != nil {
+			fail(w, err)
+			return
+		}
+		in.Status = strings.TrimSpace(in.Status)
+		if !model.ValidBreakerStatus(in.Status) {
+			fail(w, &db.UserError{Msg: "A breaker is in service, under maintenance or faulted."})
+			return
+		}
+		in.AssignedTo = strings.TrimSpace(in.AssignedTo)
+		in.StatusNote = strings.TrimSpace(in.StatusNote)
+		if len(in.AssignedTo) > 120 || len(in.StatusNote) > 500 {
+			fail(w, &db.UserError{Msg: "Keep the name under 120 characters and the note under 500."})
+			return
+		}
+		if err := s.Store.SetBreakerStatus(ctx(r), roleOf(r), kind, id, in); err != nil {
+			fail(w, err)
+			return
+		}
+		writeJSON(w, 200, map[string]bool{"ok": true})
+	}
 }
 
 func (s *Server) handleMCCBCreate(w http.ResponseWriter, r *http.Request) {

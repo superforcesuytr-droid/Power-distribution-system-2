@@ -480,3 +480,26 @@ svg.moving-column .hv-col:not(.dragging) { opacity: .55; }
   .brand-text, .date { display: none; }
   .search { max-width: none; }
 }
+
+/* Breaker status: what engineers record against an MCCB or MCB. */
+.bstatus { display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 999px; border: 1px solid currentColor; background: transparent; white-space: nowrap; }
+button.bstatus { cursor: pointer; }
+button.bstatus:hover { filter: brightness(.92); }
+.bstatus i, .ba-item i { width: 8px; height: 8px; border-radius: 50%; background: currentColor; display: inline-block; flex: none; }
+.bstatus-in_service { color: var(--green); }
+.bstatus-maintenance { color: #9a5b00; background: var(--amber-soft); }
+.bstatus-faulted { color: #fff; background: var(--red); border-color: var(--red); }
+.mccb.is-faulted { border: 2px solid var(--red); }
+.mccb.is-maintenance { border: 2px dashed var(--amber); }
+.mcb.is-faulted { box-shadow: inset 4px 0 0 var(--red); }
+.mcb.is-maintenance { box-shadow: inset 4px 0 0 var(--amber); }
+.breaker-alerts { border: 1px solid var(--amber); background: var(--amber-soft); border-radius: var(--radius); padding: 10px 14px; margin: 0 0 16px; }
+.breaker-alerts.has-fault { border-color: var(--red); background: var(--red-soft); }
+.ba-head { font-size: 14px; margin-bottom: 8px; }
+.ba-fault { color: var(--red); }
+.ba-maint { color: #9a5b00; }
+.ba-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.ba-item { display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 13px; padding: 5px 10px; border-radius: 8px; border: 1px solid currentColor; cursor: pointer; }
+.ba-item b { font-family: var(--mono); }
+.ba-item span { opacity: .9; }
+.ba-item.bstatus-faulted .muted { color: #fde8e8; }

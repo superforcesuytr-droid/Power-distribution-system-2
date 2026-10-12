@@ -477,14 +477,16 @@ func (s *Store) loadTrees(ctx context.Context, boardID int64) ([]model.BoardDeta
 	}
 
 	// MCCBs
-	mrows, err := pool.Query(ctx, `SELECT id, board_id, name, rating_a, position FROM mccbs WHERE board_id = ANY($1) ORDER BY position, name`, ids)
+	mrows, err := pool.Query(ctx, `SELECT id, board_id, name, rating_a, position, status::text, assigned_to, status_note, status_at
+		FROM mccbs WHERE board_id = ANY($1) ORDER BY position, name`, ids)
 	if err != nil {
 		return nil, err
 	}
 	mccbIndex := map[int64][2]int{} // mccb id -> (board idx, mccb idx)
 	for mrows.Next() {
 		var m model.MCCB
-		if err := mrows.Scan(&m.ID, &m.BoardID, &m.Name, &m.RatingA, &m.Position); err != nil {
+		if err := mrows.Scan(&m.ID, &m.BoardID, &m.Name, &m.RatingA, &m.Position,
+			&m.Status, &m.AssignedTo, &m.StatusNote, &m.StatusAt); err != nil {
 			mrows.Close()
 			return nil, err
 		}
@@ -499,7 +501,8 @@ func (s *Store) loadTrees(ctx context.Context, boardID int64) ([]model.BoardDeta
 	}
 
 	// MCBs
-	brows, err := pool.Query(ctx, `SELECT m.id, m.mccb_id, m.name, m.rating_a, m.position FROM mcbs m
+	brows, err := pool.Query(ctx, `SELECT m.id, m.mccb_id, m.name, m.rating_a, m.position,
+		m.status::text, m.assigned_to, m.status_note, m.status_at FROM mcbs m
 		JOIN mccbs mm ON mm.id = m.mccb_id WHERE mm.board_id = ANY($1) ORDER BY m.position, m.name`, ids)
 	if err != nil {
 		return nil, err
@@ -507,7 +510,8 @@ func (s *Store) loadTrees(ctx context.Context, boardID int64) ([]model.BoardDeta
 	mcbIndex := map[int64][3]int{}
 	for brows.Next() {
 		var mb model.MCB
-		if err := brows.Scan(&mb.ID, &mb.MCCBID, &mb.Name, &mb.RatingA, &mb.Position); err != nil {
+		if err := brows.Scan(&mb.ID, &mb.MCCBID, &mb.Name, &mb.RatingA, &mb.Position,
+			&mb.Status, &mb.AssignedTo, &mb.StatusNote, &mb.StatusAt); err != nil {
 			brows.Close()
 			return nil, err
 		}
@@ -941,6 +945,42 @@ func (s *Store) DeleteMCCB(ctx context.Context, role string, id int64) error {
 			return err
 		}
 		return s.audit(ctx, tx, role, "delete", "mccb", id, "Deleted "+name+" and its MCBs and circuits")
+	})
+}
+
+// SetBreakerStatus records what state an MCCB or MCB is in - in service, under
+// maintenance or faulted - with who is attending to it and a note, stamped
+// with when it was set. Every change goes in the activity log, so the history
+// of a breaker going down and coming back is kept.
+func (s *Store) SetBreakerStatus(ctx context.Context, role, kind string, id int64, st model.BreakerStatus) error {
+	table := map[string]string{"mccb": "mccbs", "mcb": "mcbs"}[kind]
+	if table == "" {
+		return &UserError{"Only an MCCB or an MCB carries a status."}
+	}
+	return s.withTx(ctx, func(tx pgx.Tx) error {
+		var name, was string
+		if err := tx.QueryRow(ctx, `SELECT name, status::text FROM `+table+` WHERE id = $1`, id).Scan(&name, &was); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE `+table+` SET status = $2::breaker_status, assigned_to = $3,
+			status_note = $4, status_at = now(), updated_at = now() WHERE id = $1`,
+			id, st.Status, st.AssignedTo, st.StatusNote); err != nil {
+			return err
+		}
+		summary := fmt.Sprintf("%s set to %s", name, model.BreakerStatusLabel[st.Status])
+		if was != st.Status {
+			summary = fmt.Sprintf("%s changed from %s to %s", name, model.BreakerStatusLabel[was], model.BreakerStatusLabel[st.Status])
+		}
+		if st.AssignedTo != "" {
+			summary += ", assigned to " + st.AssignedTo
+		}
+		if st.StatusNote != "" {
+			summary += " - " + st.StatusNote
+		}
+		return s.audit(ctx, tx, role, "update", kind, id, summary)
 	})
 }
 

@@ -34,6 +34,36 @@ func ValidStatus(s string) bool {
 	return s == StatusActive || s == StatusMaintenance || s == StatusInactive
 }
 
+// Breaker status values (mirrors the breaker_status enum in PostgreSQL): what
+// engineers record against an MCCB or MCB so one that is down can be found.
+const (
+	BreakerInService   = "in_service"
+	BreakerMaintenance = "maintenance"
+	BreakerFaulted     = "faulted"
+)
+
+// BreakerStatusLabel is how a breaker status is written for people to read.
+var BreakerStatusLabel = map[string]string{
+	BreakerInService:   "In service",
+	BreakerMaintenance: "Under maintenance",
+	BreakerFaulted:     "Faulted",
+}
+
+// ValidBreakerStatus reports whether s is one of the breaker status values.
+func ValidBreakerStatus(s string) bool {
+	_, ok := BreakerStatusLabel[s]
+	return ok
+}
+
+// BreakerStatus is what is recorded about a breaker's state: the status, who
+// is attending to it, a note, and when it was last changed.
+type BreakerStatus struct {
+	Status     string     `json:"status"`
+	AssignedTo string     `json:"assigned_to"`
+	StatusNote string     `json:"status_note"`
+	StatusAt   *time.Time `json:"status_at"`
+}
+
 // Settings are the tunable engineering parameters stored in app_settings.
 type Settings struct {
 	// TripFactor multiplies a breaker's rated current to give the "capacity"
@@ -141,6 +171,7 @@ type MCCB struct {
 	RatingA  float64 `json:"rating_a"`
 	Position int     `json:"position"`
 	MCBs     []MCB   `json:"mcbs"`
+	BreakerStatus
 
 	// Derived
 	Current             float64 `json:"current"`
@@ -160,6 +191,7 @@ type MCB struct {
 	RatingA  float64   `json:"rating_a"`
 	Position int       `json:"position"`
 	Circuits []Circuit `json:"circuits"`
+	BreakerStatus
 
 	// Derived
 	Current             float64 `json:"current"`
