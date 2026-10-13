@@ -503,3 +503,17 @@ button.bstatus:hover { filter: brightness(.92); }
 .ba-item b { font-family: var(--mono); }
 .ba-item span { opacity: .9; }
 .ba-item.bstatus-faulted .muted { color: #fde8e8; }
+
+/* Asset history: work recorded against a piece of equipment and changes to it. */
+.act-maintenance { background: var(--amber-soft); color: #9a5b00; }
+.maint-form { border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; margin-bottom: 8px; }
+.hist-h { font-size: 14px; margin: 18px 0 8px; }
+.hist-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; max-height: 260px; overflow-y: auto; }
+.hist-item { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 13px; }
+.hist-top { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; font-size: 12px; }
+.hist-del { margin-left: auto; }
+.mkind { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: var(--grey-soft); }
+.mkind-inspection { background: var(--primary-soft); color: var(--primary-dark); }
+.mkind-repair, .mkind-replacement { background: var(--amber-soft); color: #9a5b00; }
+.mkind-test { background: var(--green-soft); color: var(--green); }
+.mkind-incident { background: var(--red-soft); color: var(--red); }

@@ -58,11 +58,25 @@ func main() {
 		configPath = flag.String("config", "", "path to config.json (default: next to the exe, else the user config dir)")
 		devDir     = flag.String("dev", "", "serve the UI from this directory instead of the copy embedded in the binary, so edits to web/ show on a browser refresh (use \"web\" from the repository root)")
 		showVer    = flag.Bool("version", false, "print the version and exit")
+		listenAddr = flag.String("listen", "", "serve to other computers at this address, such as :8080, instead of only to this one (for an internal server or a hosted demo); also taken from PDS_LISTEN, or from PORT as cloud hosts set it")
 	)
 	flag.Parse()
 	if *showVer {
 		fmt.Println(appTitle, version)
 		return
+	}
+
+	// Served to other computers - on SSMC's network, or as a hosted demo - the
+	// application runs without a window of its own and is opened by URL.
+	if *listenAddr == "" {
+		*listenAddr = os.Getenv("PDS_LISTEN")
+	}
+	if *listenAddr == "" && os.Getenv("PORT") != "" {
+		*listenAddr = ":" + os.Getenv("PORT")
+	}
+	hosted := *listenAddr != ""
+	if hosted {
+		*headless = true
 	}
 
 	cfgPath := config.ResolvePath(*configPath)
@@ -79,7 +93,7 @@ func main() {
 	// development, or one asked for a particular port, is meant to run
 	// alongside whatever else is going, so it neither defers to a copy that is
 	// already serving nor claims to be the one that others should defer to.
-	soleInstance := *devDir == "" && *port == 0
+	soleInstance := *devDir == "" && *port == 0 && !hosted
 	dataPath := filepath.Join(config.Dir(cfgPath), "webview2")
 
 	// Launching the application while a copy is already serving should show
@@ -121,8 +135,17 @@ func main() {
 		log.Printf("dev mode: serving the UI from %s - edit and refresh, no rebuild needed", *devDir)
 	}
 
-	srv := &api.Server{Store: store, Config: cfg, Static: static, Version: version, LogPath: logPath, Dev: *devDir != ""}
-	ln, err := listen(*port)
+	srv := &api.Server{Store: store, Config: cfg, Static: static, Version: version, LogPath: logPath, Dev: *devDir != "",
+		Hosted: hosted, AccessPassword: os.Getenv("PDS_ACCESS_PASSWORD")}
+	if hosted && srv.AccessPassword == "" {
+		log.Printf("warning: served to other computers with no PDS_ACCESS_PASSWORD set - anyone who can reach it can use it")
+	}
+	var ln net.Listener
+	if hosted {
+		ln, err = net.Listen("tcp", *listenAddr)
+	} else {
+		ln, err = listen(*port)
+	}
 	if err != nil {
 		log.Fatalf("cannot listen: %v", err)
 	}

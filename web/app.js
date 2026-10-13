@@ -353,6 +353,7 @@
             <h1>${esc(b.code)}</h1>
             <span class="pill">${esc(b.voltage)} ${esc(b.phases)}</span>
             ${canManage() ? `<button class="btn btn-ghost btn-sm" data-action="edit-board" title="Edit board">✎</button>` : ''}
+            ${historyButton('board', b.id)}
           </div>
           <div class="board-sub">${[sub, b.technician, plural(t.mccb_count, 'MCCB'), plural(t.mcb_count, 'MCB'), plural(t.circuit_count, 'circuit')].filter(Boolean).map(esc).join(' · ')}</div>
         </div>
@@ -430,6 +431,7 @@
             <span class="muted">/ ${fmtA(m.capacity)} A</span>
             <span class="${levelClass(m.level)}">(${m.pct}%)</span>
           </span>
+          ${historyButton('mccb', m.id)}
           ${canEdit() ? `<button class="btn btn-soft btn-sm" data-action="add-mcb" data-id="${m.id}">+ Add MCB</button>
             <button class="btn btn-ghost btn-sm" data-action="edit-mccb" data-id="${m.id}" title="Edit MCCB">✎</button>` : ''}
           ${canManage() ? `<button class="btn btn-ghost btn-sm" data-action="delete-mccb" data-id="${m.id}" title="Delete MCCB">🗑</button>` : ''}
@@ -453,6 +455,7 @@
           <span class="mono ${levelClass(mb.level)}">(${mb.pct}%)</span>
           <span class="spacer"></span>
           <span class="count">${plural(mb.circuit_count, 'circuit')}</span>
+          ${historyButton('mcb', mb.id)}
           ${canEdit() ? `<button class="btn btn-soft btn-sm" data-action="add-circuit" data-mcb="${mb.id}">+ Circuit</button>
             <button class="btn btn-ghost btn-sm" data-action="edit-mcb" data-id="${mb.id}" title="Edit MCB">✎</button>` : ''}
           ${canManage() ? `<button class="btn btn-ghost btn-sm" data-action="delete-mcb" data-id="${mb.id}" title="Delete MCB">🗑</button>` : ''}
@@ -2594,6 +2597,67 @@
       },
       isEdit && canManage() ? { deleteLabel: 'Delete ' + label, onDelete: () => deleteBreaker(kind, item) } : {});
   }
+  // Everything that has happened to one piece of equipment: the work recorded
+  // against it - inspections, repairs, parts replaced, incidents attended - and
+  // every change made to its record. Anyone can read it; engineers add to it.
+  const MAINT_KIND = {
+    inspection: 'Inspection', repair: 'Repair', replacement: 'Replacement',
+    test: 'Test', incident: 'Incident response', other: 'Other',
+  };
+  function historyButton(entity, id, label) {
+    return `<button type="button" class="btn btn-ghost btn-sm" data-action="asset-history" data-entity="${entity}" data-id="${id}" title="History and maintenance">${label || '🕘'}</button>`;
+  }
+  async function assetHistory(entity, id) {
+    const h = await api('GET', `/api/history/${entity}/${id}`);
+    const today = new Date();
+    const iso = new Date(today.getTime() - today.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+    const fmtDay = d => new Date(d + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+    const records = h.maintenance.length ? h.maintenance.map(r => `
+      <li class="hist-item">
+        <div class="hist-top"><span class="mkind mkind-${esc(r.kind)}">${esc(MAINT_KIND[r.kind] || r.kind)}</span>
+          <span class="muted">${esc(fmtDay(r.done_on))}${r.performed_by ? ' · ' + esc(r.performed_by) : ''}</span>
+          ${canManage() ? `<button type="button" class="btn btn-ghost btn-sm hist-del" data-del="${r.id}" title="Remove this record">✕</button>` : ''}</div>
+        <div>${esc(r.description)}</div>
+      </li>`).join('') : '<li class="muted">No work recorded yet.</li>';
+    const changes = h.changes.length ? h.changes.map(e => `
+      <li class="hist-item"><div class="hist-top"><span class="act-action act-${esc(e.action)}">${esc(e.action)}</span>
+        <span class="muted">${esc(fmtDateTime(e.at))} · ${esc(e.actor_role)}</span></div><div>${esc(e.summary)}</div></li>`).join('')
+      : '<li class="muted">No changes recorded since the record was created.</li>';
+    const modal = openModal('History: ' + h.name, `
+      <p class="muted" style="margin:0 0 12px">${h.last_changed ? 'Last updated ' + esc(fmtDateTime(h.last_changed)) : 'No changes recorded yet'}
+        · ${plural(h.maintenance.length, 'maintenance record')}</p>
+      ${canEdit() ? `<form id="maint-form" class="maint-form">
+        <div class="form-grid">
+          ${field('Type of work', 'kind', 'inspection', { type: 'select', required: true, options: Object.entries(MAINT_KIND).map(([v, l]) => ({ value: v, label: l })) })}
+          ${field('Date', 'done_on', iso, { type: 'date', required: true, attrs: `max="${iso}"` })}
+          ${field('Carried out by', 'performed_by', '', { full: true, placeholder: 'Engineer, LEW or vendor', attrs: 'maxlength="120"' })}
+          ${field('Work done', 'description', '', { type: 'textarea', required: true, full: true, attrs: 'maxlength="1000" rows="3" placeholder="e.g. Inspected protection relay, replaced fuse"' })}
+        </div>
+        <div class="form-error" id="form-error"></div>
+        <div class="form-actions"><button type="submit" class="btn btn-primary">Record work</button></div>
+      </form>` : ''}
+      <h3 class="hist-h">Maintenance and work</h3><ul class="hist-list">${records}</ul>
+      <h3 class="hist-h">Changes to this record</h3><ul class="hist-list">${changes}</ul>`, { wide: true });
+    const form = $('#maint-form', modal);
+    if (form) form.addEventListener('submit', async ev => {
+      ev.preventDefault();
+      const d = {};
+      new FormData(form).forEach((v, k) => { d[k] = v; });
+      const btn = $('[type=submit]', form); btn.disabled = true;
+      try {
+        await api('POST', '/api/maintenance', { entity, entity_id: id, kind: d.kind, done_on: d.done_on, performed_by: d.performed_by, description: d.description });
+        toast(MAINT_KIND[d.kind] + ' recorded on ' + h.name, 'ok');
+        await assetHistory(entity, id);
+      } catch (e) { $('#form-error', form).textContent = e.message; btn.disabled = false; }
+    });
+    $$('[data-del]', modal).forEach(b => b.addEventListener('click', () => {
+      confirmModal('Remove maintenance record', 'Remove this record? The removal is kept in the activity log.', async () => {
+        await api('DELETE', '/api/maintenance/' + b.dataset.del);
+        setTimeout(() => assetHistory(entity, id), 0);
+      }, 'Remove');
+    }));
+  }
+
   // Engineers keep each breaker's status up to date: in service, under
   // maintenance or faulted, with who is attending to it and a note.
   function breakerStatusForm(kind, item) {
@@ -2610,7 +2674,7 @@
           { status: d.status, assigned_to: d.assigned_to, status_note: d.status_note });
         state.focus = kind + '-' + item.id;
         await afterChange(item.name + ': ' + BREAKER_STATUS[d.status].label);
-      }, { submitLabel: 'Update status' });
+      }, { submitLabel: 'Update status', extra: historyButton(kind, item.id, 'History & maintenance') });
   }
 
   function suggestBreakerName(kind, parentId) {
@@ -2716,7 +2780,8 @@
         }
         else { const r = await api('POST', '/api/hv/feeders', body); state.focus = 'hv-feeder-' + r.id; await afterChange('Feeder added'); }
       },
-      isEdit && canManage() ? { deleteLabel: 'Delete feeder', onDelete: () => hvDeleteFeeder(f) } : {});
+      isEdit && canManage() ? { deleteLabel: 'Delete feeder', onDelete: () => hvDeleteFeeder(f), extra: historyButton('hv_feeder', f.id, 'History & maintenance') }
+        : (isEdit ? { extra: historyButton('hv_feeder', f.id, 'History & maintenance') } : {}));
   }
   // The ways an incomer could tap: any way on this drawing that is not on the
   // incomer's own switchboard, since a board does not feed itself.
@@ -2803,7 +2868,8 @@
         }
         else { const r = await api('POST', '/api/hv/ways', body); state.focus = 'hv-way-' + r.id; await afterChange('Way added'); }
       },
-      isEdit && canManage() ? { wide: true, deleteLabel: 'Delete way', onDelete: () => hvDeleteWay(way) } : { wide: true });
+      isEdit && canManage() ? { wide: true, deleteLabel: 'Delete way', onDelete: () => hvDeleteWay(way), extra: historyButton('hv_way', way.id, 'History & maintenance') }
+        : (isEdit ? { wide: true, extra: historyButton('hv_way', way.id, 'History & maintenance') } : { wide: true }));
   }
 
   // ---- devices fitted on a way
@@ -2838,7 +2904,7 @@
       },
       isEdit ? {
         deleteLabel: 'Remove', onDelete: () => hvDeleteDevice(dev),
-        extra: `<button type="button" class="btn btn-sm" data-act="up" title="Move up the way">↑</button>
+        extra: historyButton('hv_device', dev.id, 'History & maintenance') + `<button type="button" class="btn btn-sm" data-act="up" title="Move up the way">↑</button>
                 <button type="button" class="btn btn-sm" data-act="down" title="Move down the way">↓</button>`,
       } : {});
     // The transformer figures only apply to a transformer.
@@ -3062,7 +3128,8 @@
         else { await api('POST', '/api/hv/switchboards?network=' + ((state.hv || {}).id || 0), body); await afterChange('Switchboard added'); }
       },
       isEdit && canManage() ? { wide: true, deleteLabel: 'Delete switchboard', onDelete: () => hvDeleteBoard(board),
-        extra: wayCount ? `<button type="button" class="btn btn-danger left" data-act="clear-ways">Remove all ${wayCount} ways</button>` : '' } : { wide: true });
+        extra: (wayCount ? `<button type="button" class="btn btn-danger left" data-act="clear-ways">Remove all ${wayCount} ways</button>` : '') + historyButton('hv_switchboard', board.id, 'History & maintenance') }
+        : (isEdit ? { wide: true, extra: historyButton('hv_switchboard', board.id, 'History & maintenance') } : { wide: true }));
     if (isEdit && canManage() && wayCount) {
       const btn = $('[data-act=clear-ways]');
       if (btn) btn.addEventListener('click', () => hvClearWays(board));
@@ -3279,6 +3346,7 @@
       case 'edit-board': boardForm(state.board); break;
       case 'add-mccb': breakerForm('mccb', null); break;
       case 'edit-mccb': breakerForm('mccb', findMCCB(id)); break;
+      case 'asset-history': assetHistory(el.dataset.entity, id).catch(err => toast(err.message, 'error')); break;
       case 'breaker-status': breakerStatusForm(el.dataset.kind, el.dataset.kind === 'mccb' ? findMCCB(id) : findMCB(id)); break;
       case 'delete-mccb': deleteBreaker('mccb', findMCCB(id)); break;
       case 'add-mcb': breakerForm('mcb', null, id); break;

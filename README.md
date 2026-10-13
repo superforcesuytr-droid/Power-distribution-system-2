@@ -46,6 +46,15 @@ The single line diagram is drawn from the same data and can be edited directly:
   also be moved to a different MCCB and the diagram re-routes it. Clicking a
   breaker body opens it on the dashboard.
 - **Activity** - audit log of every change (who, what, when).
+- **Breaker status** - every MCCB and MCB is marked in service, under
+  maintenance or faulted, with the engineer assigned and a note. Breakers that
+  are down are listed at the top of their board and highlighted on the single
+  line diagram.
+- **History and maintenance** - work carried out on any piece of equipment,
+  from a 22 kV way or its switchgear down to an MCB, is recorded against it
+  (inspection, repair, replacement, test or incident response, with the date
+  and who did it), and its history shows that work alongside every change made
+  to its record.
 - **Global search** across boards, MCCBs, MCBs and circuits.
 - **Roles** - Viewer (read only), Technician (add/edit breakers and circuits),
   Supervisor (everything, including delete, buildings/boards and settings).
@@ -115,6 +124,23 @@ with the log file beside it. To see the log:
 ```sh
 tail -f ~/Library/Application\ Support/PowerDistribution/power-distribution.log
 ```
+
+### Serving it to other computers
+
+The same executable can run on a server so that engineers open it in a
+browser - on the company network, or as a hosted demonstration:
+
+```sh
+DATABASE_URL=postgres://user:pass@host:5432/power_distribution \
+PDS_ACCESS_PASSWORD=choose-one \
+./pds --listen :8080
+```
+
+`--listen` (or `PDS_LISTEN`, or `PORT` as cloud hosts set it) serves to other
+computers instead of opening a window. `PDS_ACCESS_PASSWORD` asks everyone for
+that one shared password before anything is shown; it is not a login for each
+user. In this mode the database connection cannot be changed from the browser.
+The `Dockerfile` builds an image that runs this way, for hosts such as Render.
 
 ### Command-line options
 

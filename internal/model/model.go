@@ -317,6 +317,40 @@ type AuditEntry struct {
 	Summary   string    `json:"summary"`
 }
 
+// Maintenance kinds: what sort of work a maintenance record describes.
+var MaintenanceKindLabel = map[string]string{
+	"inspection":  "Inspection",
+	"repair":      "Repair",
+	"replacement": "Replacement",
+	"test":        "Test",
+	"incident":    "Incident response",
+	"other":       "Other",
+}
+
+// MaintenanceRecord is a piece of work carried out on one asset.
+type MaintenanceRecord struct {
+	ID          int64     `json:"id"`
+	Entity      string    `json:"entity"`
+	EntityID    int64     `json:"entity_id"`
+	Kind        string    `json:"kind"`
+	DoneOn      string    `json:"done_on"`
+	PerformedBy string    `json:"performed_by"`
+	Description string    `json:"description"`
+	ActorRole   string    `json:"actor_role"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+// AssetHistory is everything known about what has happened to one asset: the
+// work recorded against it and every change made to its record.
+type AssetHistory struct {
+	Entity      string              `json:"entity"`
+	EntityID    int64               `json:"entity_id"`
+	Name        string              `json:"name"`
+	LastChanged *time.Time          `json:"last_changed"`
+	Maintenance []MaintenanceRecord `json:"maintenance"`
+	Changes     []AuditEntry        `json:"changes"`
+}
+
 // SearchHit is one row of the global search.
 type SearchHit struct {
 	Kind     string `json:"kind"` // building | board | mccb | mcb | circuit

@@ -4,6 +4,7 @@ package api
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/csv"
 	"encoding/json"
 	"errors"
@@ -30,6 +31,15 @@ type Server struct {
 	LogPath string
 	Dev     bool
 
+	// Hosted is set when the application is served to other computers rather
+	// than shown in a window on this one. The database connection then comes
+	// from the server's own settings and cannot be changed from the browser.
+	Hosted bool
+	// AccessPassword, when set, must be given before anything is served. It
+	// keeps a hosted copy - a demonstration, say - away from passers-by; it is
+	// one shared password, not a login for each user.
+	AccessPassword string
+
 	// windows counts the interface windows currently on screen, and seen
 	// records whether one has ever connected. A window holds an event-stream
 	// connection open for as long as it is displayed, which is what lets the
@@ -54,8 +64,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/status", s.handleStatus)
 	mux.HandleFunc("GET /api/session", s.handleSession)
 	mux.HandleFunc("GET /api/setup", s.handleSetupGet)
-	mux.HandleFunc("POST /api/setup/test", s.handleSetupTest)
-	mux.HandleFunc("POST /api/setup", s.handleSetupSave)
+	mux.HandleFunc("POST /api/setup/test", s.notHosted(s.handleSetupTest))
+	mux.HandleFunc("POST /api/setup", s.notHosted(s.handleSetupSave))
 	mux.HandleFunc("GET /api/settings", s.handleSettingsGet)
 	mux.HandleFunc("PUT /api/settings", s.requireRole(model.RoleSupervisor, s.handleSettingsPut))
 
@@ -68,6 +78,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/mcbs/{id}/next-code", s.handleNextCode)
 	mux.HandleFunc("GET /api/search", s.handleSearch)
 	mux.HandleFunc("GET /api/audit", s.handleAudit)
+	mux.HandleFunc("GET /api/history/{entity}/{id}", s.handleAssetHistory)
+	mux.HandleFunc("POST /api/maintenance", s.requireRole(model.RoleTechnician, s.handleMaintenanceCreate))
+	mux.HandleFunc("DELETE /api/maintenance/{id}", s.requireRole(model.RoleSupervisor, s.handleMaintenanceDelete))
 
 	// Writes. Buildings and boards are structural, so only supervisors may
 	// touch them. Technicians may add/edit breakers and circuits but never
@@ -115,7 +128,39 @@ func (s *Server) Handler() http.Handler {
 		fileServer.ServeHTTP(w, r)
 	})
 
-	return s.logging(noCache(mux))
+	return s.logging(s.guard(noCache(mux)))
+}
+
+// guard asks for the shared access password, when one is set, before serving
+// anything at all - the page itself included, so nothing about the network is
+// shown to someone who does not have it.
+func (s *Server) guard(next http.Handler) http.Handler {
+	if s.AccessPassword == "" {
+		return next
+	}
+	want := []byte(s.AccessPassword)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, pass, ok := r.BasicAuth()
+		if !ok || subtle.ConstantTimeCompare([]byte(pass), want) != 1 {
+			w.Header().Set("WWW-Authenticate", `Basic realm="Power Distribution System", charset="UTF-8"`)
+			http.Error(w, "The access password is needed to open this application.", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// notHosted refuses a request that would change where the data is kept when
+// the application is served to other computers: there the connection is set on
+// the server, not by whoever opens the page.
+func (s *Server) notHosted(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.Hosted {
+			writeError(w, http.StatusForbidden, "The database connection is set on the server and cannot be changed from here.")
+			return
+		}
+		h(w, r)
+	}
 }
 
 // ---------------------------------------------------------------- helpers
@@ -922,6 +967,72 @@ func (s *Server) handleCircuitDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Store.DeleteCircuit(ctx(r), roleOf(r), id); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+// handleAssetHistory returns the work recorded against one asset and every
+// change made to its record.
+func (s *Server) handleAssetHistory(w http.ResponseWriter, r *http.Request) {
+	entity := r.PathValue("entity")
+	if !db.ValidAssetEntity(entity) {
+		fail(w, &db.UserError{Msg: "There is no history for that."})
+		return
+	}
+	id, err := pathID(r)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	h, err := s.Store.AssetHistory(ctx(r), entity, id)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, h)
+}
+
+// handleMaintenanceCreate records a piece of work carried out on an asset.
+func (s *Server) handleMaintenanceCreate(w http.ResponseWriter, r *http.Request) {
+	var in model.MaintenanceRecord
+	if err := decode(r, &in); err != nil {
+		fail(w, err)
+		return
+	}
+	in.Kind = strings.TrimSpace(in.Kind)
+	in.Description = strings.TrimSpace(in.Description)
+	in.PerformedBy = strings.TrimSpace(in.PerformedBy)
+	switch {
+	case !db.ValidAssetEntity(in.Entity) || in.EntityID <= 0:
+		fail(w, &db.UserError{Msg: "Choose the equipment the work was done on."})
+		return
+	case model.MaintenanceKindLabel[in.Kind] == "":
+		fail(w, &db.UserError{Msg: "Choose what kind of work it was."})
+		return
+	case in.Description == "":
+		fail(w, &db.UserError{Msg: "Describe the work that was done."})
+		return
+	case len(in.Description) > 1000 || len(in.PerformedBy) > 120:
+		fail(w, &db.UserError{Msg: "Keep the description under 1000 characters and the name under 120."})
+		return
+	}
+	id, err := s.Store.AddMaintenance(ctx(r), roleOf(r), in)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 201, map[string]int64{"id": id})
+}
+
+func (s *Server) handleMaintenanceDelete(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if err := s.Store.DeleteMaintenance(ctx(r), roleOf(r), id); err != nil {
 		fail(w, err)
 		return
 	}
