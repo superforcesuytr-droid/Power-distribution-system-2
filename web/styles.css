@@ -71,7 +71,7 @@ input, select, textarea { font: inherit; color: inherit; }
 }
 .tabs a.active { background: var(--primary); color: #fff; font-weight: 600; }
 .tabs a:not(.active):hover { background: var(--panel-2); }
-.search { position: relative; flex: 1; max-width: 360px; margin-left: auto; }
+.search { position: relative; flex: 1; min-width: 200px; max-width: 360px; margin-left: auto; }
 .search > svg { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); color: var(--faint); }
 .search input {
   width: 100%; height: 36px; padding: 0 12px 0 32px;
@@ -80,18 +80,25 @@ input, select, textarea { font: inherit; color: inherit; }
 }
 .search input:focus { border-color: var(--primary); background: #fff; }
 .search-results {
-  position: absolute; top: 40px; left: 0; right: 0;
+  position: absolute; top: 40px; right: 0; width: max(100%, min(440px, calc(100vw - 24px)));
   background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(16,24,40,.12); overflow: hidden; max-height: 380px; overflow-y: auto;
+  box-shadow: 0 8px 24px rgba(16,24,40,.12); overflow: hidden; max-height: 420px; overflow-y: auto;
 }
-.search-hit { display: flex; align-items: center; gap: 10px; padding: 9px 12px; cursor: pointer; }
+/* Each hit on two lines: what it is and its name, then where it is. */
+.search-hit {
+  display: grid; grid-template-columns: auto 1fr; column-gap: 10px; row-gap: 2px; align-items: baseline;
+  padding: 8px 12px; cursor: pointer; border-bottom: 1px solid var(--panel-2);
+}
+.search-hit:last-child { border-bottom: none; }
 .search-hit:hover, .search-hit.active { background: var(--primary-soft); }
 .search-hit .kind {
-  font-size: 10px; text-transform: uppercase; letter-spacing: .06em; font-weight: 700;
-  color: var(--muted); width: 58px; flex: none;
+  font-size: 10px; text-transform: uppercase; letter-spacing: .05em; font-weight: 700;
+  color: var(--muted); background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 4px; padding: 1px 6px; white-space: nowrap; justify-self: start;
 }
-.search-hit .title { font-family: var(--mono); font-weight: 600; }
-.search-hit .sub { color: var(--muted); font-size: 12px; margin-left: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 55%; }
+.search-hit .title { font-family: var(--mono); font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-hit .sub { grid-column: 1 / -1; color: var(--muted); font-size: 12px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.search-hit .sub:empty { display: none; }
 .search-empty { padding: 12px; color: var(--muted); }
 .date { color: var(--muted); font-size: 13px; white-space: nowrap; }
 .role { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; white-space: nowrap; }
