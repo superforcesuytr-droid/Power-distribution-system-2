@@ -135,6 +135,7 @@
     if (params.board) { state.boardId = params.board; localStorage.setItem('pds.boardId', String(params.board)); }
     if (params.focus) state.focus = params.focus;
     setActiveTab(view);
+    setSearchScope();
     if (!state.status || state.status.db.state !== 'ready') {
       await refreshStatus();
       if (state.status.db.state !== 'ready') { showSetup(state.status.db.message); return; }
@@ -494,7 +495,13 @@
     if (!state.focus) return;
     const el = document.getElementById(state.focus);
     state.focus = null;
+    const readable = state.focusReadable;
+    state.focusReadable = false;
     if (!el) return;
+    // Something searched for is no use as a speck on a drawing fitted to the
+    // window, so the drawing is brought to full size first.
+    const canvas = el.closest('#diagram-canvas');
+    if (readable && canvas && canvas.pdsZoom && canvas.pdsZoom.get() < 0.8) canvas.pdsZoom.set(1);
     const mccb = el.closest('.mccb');
     if (mccb && mccb.classList.contains('collapsed')) {
       mccb.classList.remove('collapsed');
@@ -657,6 +664,8 @@
       if (was.z && Math.abs(was.w - baseW) <= baseW * 0.12) saved = was.z;
     } catch (_) { /* ignore */ }
     apply(saved || fitZoom());
+    // Lets a search bring what it found up to a readable size.
+    canvas.pdsZoom = { get: () => zoom, set: apply };
 
     // Editing the diagram redraws it, and on a wide one that would otherwise
     // throw the view back to the far left, away from what was just changed.
@@ -3287,20 +3296,42 @@
   const searchInput = $('#search-input'), searchResults = $('#search-results');
   let searchHits = [], searchIndex = -1;
   function hideSearch() { searchResults.hidden = true; searchIndex = -1; }
+  // On the HV overview the box looks for HV equipment - switchgear,
+  // transformers, generators, chillers - instead of breakers and circuits,
+  // which are not on those drawings.
+  const onHV = () => !!state.route && state.route.view === 'hv';
+  const HV_HIT_KIND = { ...DEVICE_LABEL, generator: 'Generator', incomer: 'Incomer', way: 'Way', switchboard: 'Switchboard' };
+  function setSearchScope() {
+    const hv = onHV();
+    if (searchInput.dataset.scope === (hv ? 'hv' : 'lv')) return;
+    searchInput.dataset.scope = hv ? 'hv' : 'lv';
+    searchInput.placeholder = hv ? 'Switchgear, TX, generator, chiller…' : 'Search MCCB / MCB / circuit…';
+    searchInput.value = ''; searchHits = []; hideSearch();
+  }
   const runSearch = debounce(async () => {
     const q = searchInput.value.trim();
     if (!q) { hideSearch(); return; }
+    const hv = onHV();
     try {
-      searchHits = await api('GET', '/api/search?q=' + encodeURIComponent(q));
+      searchHits = await api('GET', (hv ? '/api/hv/search?q=' : '/api/search?q=') + encodeURIComponent(q));
     } catch (e) { searchHits = []; }
+    searchHits.forEach(h => { h.hv = hv; });
     searchIndex = -1;
     searchResults.innerHTML = searchHits.length ? searchHits.map((h, i) => `
-      <div class="search-hit" data-i="${i}"><span class="kind">${esc(h.kind)}</span><span class="title">${esc(h.title)}</span><span class="sub">${esc(h.subtitle)}</span></div>`).join('')
+      <div class="search-hit" data-i="${i}"><span class="kind">${esc(hv ? (HV_HIT_KIND[h.kind] || h.kind) : h.kind)}</span><span class="title">${esc(h.title)}</span><span class="sub">${esc(hv ? [h.subtitle, h.drawing].filter(Boolean).join(' · ') : h.subtitle)}</span></div>`).join('')
       : `<div class="search-empty">No matches for “${esc(q)}”</div>`;
     searchResults.hidden = false;
   }, 180);
   function gotoHit(h) {
     hideSearch(); searchInput.value = '';
+    if (h.hv) {
+      // The focus is applied as the drawing renders; the same drawing is
+      // re-rendered too, so a second search on it still brings the item in.
+      state.focus = h.focus;
+      state.focusReadable = true;
+      navigate('#/hv/' + h.network_id);
+      return;
+    }
     if (h.kind === 'building') {
       const bo = (state.overview ? state.overview.boards : []).find(b => b.building_id === h.id);
       navigate(boardHash('dashboard', bo ? bo.id : 0));

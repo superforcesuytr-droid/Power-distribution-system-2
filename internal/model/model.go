@@ -352,6 +352,17 @@ type AssetHistory struct {
 }
 
 // SearchHit is one row of the global search.
+// HVSearchHit is a piece of equipment found on the high-voltage drawings, with
+// the drawing it is on and the element to bring into view there.
+type HVSearchHit struct {
+	Kind      string `json:"kind"` // switchgear | transformer | chiller | generator | incomer | way | switchboard | other device kinds
+	Title     string `json:"title"`
+	Subtitle  string `json:"subtitle"`
+	NetworkID int64  `json:"network_id"`
+	Drawing   string `json:"drawing"`
+	Focus     string `json:"focus"`
+}
+
 type SearchHit struct {
 	Kind     string `json:"kind"` // building | board | mccb | mcb | circuit
 	ID       int64  `json:"id"`

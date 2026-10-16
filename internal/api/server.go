@@ -77,6 +77,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/circuits.csv", s.handleCircuitsCSV)
 	mux.HandleFunc("GET /api/mcbs/{id}/next-code", s.handleNextCode)
 	mux.HandleFunc("GET /api/search", s.handleSearch)
+	mux.HandleFunc("GET /api/hv/search", s.handleHVSearch)
 	mux.HandleFunc("GET /api/audit", s.handleAudit)
 	mux.HandleFunc("GET /api/history/{entity}/{id}", s.handleAssetHistory)
 	mux.HandleFunc("POST /api/maintenance", s.requireRole(model.RoleTechnician, s.handleMaintenanceCreate))
@@ -537,6 +538,15 @@ func (s *Server) handleNextCode(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	hits, err := s.Store.Search(ctx(r), r.URL.Query().Get("q"), int(queryInt64(r, "limit")))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, hits)
+}
+
+func (s *Server) handleHVSearch(w http.ResponseWriter, r *http.Request) {
+	hits, err := s.Store.HVSearch(ctx(r), r.URL.Query().Get("q"), int(queryInt64(r, "limit")))
 	if err != nil {
 		fail(w, err)
 		return
