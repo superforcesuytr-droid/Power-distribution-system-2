@@ -135,6 +135,16 @@ input, select, textarea { font: inherit; color: inherit; }
 .btn-plus:hover { background: var(--primary-dark); }
 .btn-chip { font-family: var(--mono); font-weight: 600; padding: 8px 16px; border-radius: 8px; }
 .btn-chip.active { background: var(--primary); border-color: var(--primary); color: #fff; }
+.btn-chip small { font-family: var(--sans); font-weight: 500; font-size: 11px; color: var(--muted); margin-left: 6px; }
+.btn-chip.active small { color: rgba(255,255,255,.8); }
+
+.board-picker { border: 1px solid var(--border); border-radius: 10px; background: var(--panel); margin-bottom: 16px; }
+.bp-row { display: grid; grid-template-columns: 150px 1fr; gap: 12px; align-items: start; padding: 10px 14px; }
+.bp-row + .bp-row { border-top: 1px solid var(--border); }
+.bp-building { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 700; padding-top: 7px; }
+.bp-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.bp-chips .btn-chip { padding: 5px 11px; font-size: 13px; border-radius: 7px; }
+@media (max-width: 640px) { .bp-row { grid-template-columns: 1fr; gap: 6px; } .bp-building { padding-top: 0; } }
 
 /* ------------------------------------------------------------------ sidebar */
 .side-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }

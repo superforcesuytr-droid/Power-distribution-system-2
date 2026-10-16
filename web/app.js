@@ -710,6 +710,34 @@
   }
 
   // ------------------------------------------------------------ single line diagram
+  // The boards to choose from, a row per building so a long list stays easy to
+  // scan. A code written as "FAC-LVSB12 (A10 FAB FACILITIES SWITCHROOM)" shows
+  // the room smaller, after the code, so the codes line up as the thing to read.
+  // Within a building boards keep their set order, then go by code with the
+  // numbers read as numbers (PE2 before PE10).
+  const byCode = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+  function boardPicker(boards) {
+    if (!boards.length) return '<div class="chips"><span class="lbl">BOARD:</span><span class="muted">No boards yet</span></div>';
+    const groups = new Map();
+    boards.forEach(x => {
+      const k = x.building_name || '';
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(x);
+    });
+    const chip = x => {
+      const m = /^(.*?)\s*\((.+)\)\s*$/.exec(x.code);
+      const label = m ? `${esc(m[1])}<small>${esc(m[2])}</small>` : esc(x.code);
+      return `<button class="btn btn-chip${x.id === state.boardId ? ' active' : ''}" data-action="sld-board" data-id="${x.id}" title="${esc(x.code)}">${label}</button>`;
+    };
+    return `<div class="board-picker">
+      ${[...groups].map(([name, list]) => `
+        <div class="bp-row">
+          <div class="bp-building">${esc(name) || 'Boards'}</div>
+          <div class="bp-chips">${list.slice().sort((a, b) => (a.position - b.position) || byCode.compare(a.code, b.code)).map(chip).join('')}</div>
+        </div>`).join('')}
+    </div>`;
+  }
+
   async function renderSLD() {
     const ov = await loadOverview();
     if (state.boardId && !ov.boards.some(b => b.id === state.boardId)) state.boardId = 0;
@@ -720,10 +748,7 @@
     const st = ov.settings;
     app.innerHTML = `
       <div class="page">
-        <div class="chips"><span class="lbl">BOARD:</span>
-          ${ov.boards.map(x => `<button class="btn btn-chip ${x.id === state.boardId ? 'active' : ''}" data-action="sld-board" data-id="${x.id}">${esc(x.code)}</button>`).join('')}
-          ${!ov.boards.length ? '<span class="muted">No boards yet</span>' : ''}
-        </div>
+        ${boardPicker(ov.boards)}
         ${b ? `
         <div class="sld-summary">
           <span class="code">${esc(b.code)}</span>
