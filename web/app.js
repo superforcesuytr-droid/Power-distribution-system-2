@@ -2798,7 +2798,8 @@
       ${isEdit ? '' : field('Transformer designation', 'transformer', '', { placeholder: 'TX33', hint: 'Only when it lands through one.', attrs: 'style="text-transform:uppercase"' })}
       ${lowTension ? '' : field('Switchgear designation', 'switchgear', isEdit ? (f.switchgear || '') : '', { placeholder: '22SGI5', hint: 'Written up the side of the breaker.', attrs: 'style="text-transform:uppercase"' })}
       ${field('Voltage', 'voltage', isEdit ? f.voltage : (state.hv.voltage || '22kV'), { placeholder: '22kV' })}
-      ${field('Source', 'source', isEdit ? f.source : '', { full: true, placeholder: 'e.g. Incoming supply 5, intake substation' })}
+      ${field('Source', 'source', isEdit ? f.source : '', { full: true, placeholder: 'Choose or type, e.g. Incoming supply 5 or FAC1 / MCCB Q1', attrs: 'list="hv-sources" autocomplete="off"', hint: 'Pick an incoming supply, generator or MCCB from the list, or type your own.' })}
+      <datalist id="hv-sources">${hvSourceOptions().map(x => `<option value="${esc(x)}">`).join('')}</datalist>
       ${field('Taps its supply from', 'source_way_id', isEdit && f.source_way_id ? f.source_way_id : '', { type: 'select', full: true,
         options: [{ value: '', label: '— fed from off this drawing —' }].concat(hvTapSources(isEdit ? f : null, Number(sectionId) || (isEdit ? f.section_id : 0))),
         hint: 'Naming a way on another switchboard here draws this incomer under its own bar, with the line running across to that way.' })}
@@ -2816,6 +2817,20 @@
       },
       isEdit && canManage() ? { deleteLabel: 'Delete feeder', onDelete: () => hvDeleteFeeder(f), extra: historyButton('hv_feeder', f.id, 'History & maintenance') }
         : (isEdit ? { extra: historyButton('hv_feeder', f.id, 'History & maintenance') } : {}));
+    hvAddMCCBSources();
+  }
+  // A low-voltage board is often fed from an MCCB on another board, so the
+  // MCCBs are offered as sources too, each named with its board.
+  async function hvAddMCCBSources() {
+    let mccbs = [];
+    try { mccbs = await api('GET', '/api/mccbs'); } catch (e) { return; }
+    const list = $('#hv-sources');
+    if (!list) return;
+    const have = new Set($$('option', list).map(o => o.value.toLowerCase()));
+    list.insertAdjacentHTML('beforeend', mccbs.map(m => {
+      const v = `${m.board} / ${/^mccb/i.test(m.name) ? '' : 'MCCB '}${m.name}`;
+      return have.has(v.toLowerCase()) ? '' : `<option value="${esc(v)}" label="${esc('MCCB' + (m.rating_a ? ' · ' + fmtA(m.rating_a) + ' A' : ''))}">`;
+    }).join(''));
   }
   // The ways an incomer could tap: any way on this drawing that is not on the
   // incomer's own switchboard, since a board does not feed itself.
@@ -2831,6 +2846,18 @@
         out.push({ value: w.id, label: b.name + ' · ' + (w.name || 'unnamed way') });
       }));
     });
+    return out;
+  }
+  // What the Source box offers: the sources already written on this drawing,
+  // the next incoming supply in the series, and the usual others - so the same
+  // source is spelt the same way on every incomer.
+  function hvSourceOptions() {
+    const have = hvFeeders().map(f => (f.source || '').trim()).filter(Boolean);
+    const nums = have.map(x => /^incoming supply\s*(\d+)$/i.exec(x)).filter(Boolean).map(m => Number(m[1]));
+    const next = 'Incoming supply ' + ((nums.length ? Math.max(...nums) : 0) + 1);
+    const usual = ['Emergency supply', 'Emergency generator', 'Standby generator', 'Intake substation', '22kV/6.6kV transformer'];
+    const seen = new Set(), out = [];
+    [...have, next, ...usual].forEach(x => { const k = x.toLowerCase(); if (!seen.has(k)) { seen.add(k); out.push(x); } });
     return out;
   }
   function hvNextFeederName() {

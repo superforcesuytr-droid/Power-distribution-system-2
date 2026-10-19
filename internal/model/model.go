@@ -363,6 +363,13 @@ type HVSearchHit struct {
 	Focus     string `json:"focus"`
 }
 
+// MCCBName is an MCCB named with the board it is on.
+type MCCBName struct {
+	Board   string  `json:"board"`
+	Name    string  `json:"name"`
+	RatingA float64 `json:"rating_a"`
+}
+
 type SearchHit struct {
 	Kind     string `json:"kind"` // building | board | mccb | mcb | circuit
 	ID       int64  `json:"id"`

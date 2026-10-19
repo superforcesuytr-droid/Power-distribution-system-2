@@ -87,3 +87,29 @@ func (s *Store) HVSearch(ctx context.Context, q string, limit int) ([]model.HVSe
 	}
 	return out, rows.Err()
 }
+
+// MCCBNames lists every MCCB by name with the board it is on, for naming what
+// an incomer is fed from: a low-voltage board is often supplied from an MCCB
+// on another board rather than straight from a switchboard.
+func (s *Store) MCCBNames(ctx context.Context) ([]model.MCCBName, error) {
+	pool, err := s.getPool()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := pool.Query(ctx, `SELECT bo.code, mm.name, mm.rating_a::float8
+		FROM mccbs mm JOIN boards bo ON bo.id = mm.board_id
+		ORDER BY bo.code, mm.position, mm.name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []model.MCCBName{}
+	for rows.Next() {
+		var m model.MCCBName
+		if err := rows.Scan(&m.Board, &m.Name, &m.RatingA); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}

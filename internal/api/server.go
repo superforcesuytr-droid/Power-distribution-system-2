@@ -78,6 +78,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/mcbs/{id}/next-code", s.handleNextCode)
 	mux.HandleFunc("GET /api/search", s.handleSearch)
 	mux.HandleFunc("GET /api/hv/search", s.handleHVSearch)
+	mux.HandleFunc("GET /api/mccbs", s.handleMCCBNames)
 	mux.HandleFunc("GET /api/audit", s.handleAudit)
 	mux.HandleFunc("GET /api/history/{entity}/{id}", s.handleAssetHistory)
 	mux.HandleFunc("POST /api/maintenance", s.requireRole(model.RoleTechnician, s.handleMaintenanceCreate))
@@ -552,6 +553,15 @@ func (s *Server) handleHVSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, hits)
+}
+
+func (s *Server) handleMCCBNames(w http.ResponseWriter, r *http.Request) {
+	list, err := s.Store.MCCBNames(ctx(r))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, list)
 }
 
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
