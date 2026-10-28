@@ -1,0 +1,235 @@
+{
+  "key": "ssmc-pe1",
+  "name": "PE 1 Switchboard",
+  "description": "PE 1 low-tension switchboard: incomer 1 (FL04E, from TX17) and incomer 2 (FR04E, from TX18), 5000 A each, joined by bus section switch PE 1-BS, with the 800 A ways on the front-left, rear-left, front-right and rear-right panels, as labelled on site.",
+  "tier": "lt",
+  "voltage": "",
+  "boards": [
+    {
+      "name": "PE 1",
+      "voltage": "",
+      "phases": "",
+      "frequency": "",
+      "current_a": 5000,
+      "fault_ka": null,
+      "sections": [
+        {
+          "name": "Section A (FL/RL)",
+          "feeders": [
+            {
+              "name": "22SG17",
+              "switchgear": "PE 1-INC.1",
+              "source": "Incomer No. 1 from TX17",
+              "rating_a": 5000,
+              "devices": [
+                {
+                  "kind": "transformer",
+                  "name": "TX17"
+                },
+                {
+                  "kind": "switchgear",
+                  "name": "PE 1-INC.1"
+                }
+              ],
+              "offset_x": 0.96
+            }
+          ],
+          "ways": [
+            {
+              "name": "FL05A",
+              "head": "switchgear",
+              "dest_label": "AWC102",
+              "dest_detail": "Low dope clean",
+              "notes": "Front left",
+              "rating_a": 800
+            },
+            {
+              "name": "FL06A",
+              "head": "switchgear",
+              "dest_label": "PE-2FAB3",
+              "dest_detail": "Process equipment DB · LBS#2",
+              "notes": "Front left",
+              "rating_a": 800
+            },
+            {
+              "name": "FL07A",
+              "head": "switchgear",
+              "dest_label": "PE-2FAB5",
+              "dest_detail": "Process equipment DB · LBS#3",
+              "notes": "Front left",
+              "rating_a": 800
+            },
+            {
+              "name": "FL08A",
+              "head": "switchgear",
+              "dest_label": "PE-2FAB9",
+              "dest_detail": "Process equipment DB · LBS#5",
+              "notes": "Front left",
+              "rating_a": 800
+            },
+            {
+              "name": "FL09A",
+              "head": "switchgear",
+              "dest_label": "Spare",
+              "dest_detail": "SPARE-5 · 800A feeder spare",
+              "notes": "Front left",
+              "rating_a": 800
+            },
+            {
+              "name": "RL05A",
+              "head": "switchgear",
+              "dest_label": "Spare",
+              "dest_detail": "SPARE-2",
+              "notes": "Rear left",
+              "rating_a": 800
+            },
+            {
+              "name": "RL06A",
+              "head": "switchgear",
+              "dest_label": "AWS104",
+              "dest_detail": "Wet strip (FR etch)",
+              "notes": "Rear left",
+              "rating_a": 800
+            },
+            {
+              "name": "RL07A",
+              "head": "switchgear",
+              "dest_label": "AWC202",
+              "dest_detail": "High dope clean",
+              "notes": "Rear left",
+              "rating_a": 800
+            },
+            {
+              "name": "RL08A",
+              "head": "switchgear",
+              "dest_label": "PE-2FAB16",
+              "dest_detail": "Process equipment DB · LBS#8",
+              "notes": "Rear left",
+              "rating_a": 800
+            }
+          ]
+        },
+        {
+          "name": "Section B (FR/RR)",
+          "feeders": [
+            {
+              "name": "22SG18",
+              "switchgear": "PE 1-INC 2",
+              "source": "Incomer No. 2 from TX18",
+              "rating_a": 5000,
+              "devices": [
+                {
+                  "kind": "transformer",
+                  "name": "TX18"
+                },
+                {
+                  "kind": "switchgear",
+                  "name": "PE 1-INC 2"
+                }
+              ],
+              "offset_x": 0.04
+            }
+          ],
+          "ways": [
+            {
+              "name": "FR05",
+              "head": "switchgear",
+              "dest_label": "CLINK",
+              "dest_detail": "",
+              "notes": "Front right"
+            },
+            {
+              "name": "FR06A",
+              "head": "switchgear",
+              "dest_label": "PE-2FAB2",
+              "dest_detail": "Process equipment DB · LBS#8",
+              "notes": "Front right",
+              "rating_a": 800
+            },
+            {
+              "name": "FR07A",
+              "head": "switchgear",
+              "dest_label": "PE-2FAB4",
+              "dest_detail": "Process equipment DB · LBS#3",
+              "notes": "Front right",
+              "rating_a": 800
+            },
+            {
+              "name": "FR08A",
+              "head": "switchgear",
+              "dest_label": "PE-2FAB6",
+              "dest_detail": "Process equipment DB · LBS#2",
+              "notes": "Front right",
+              "rating_a": 800
+            },
+            {
+              "name": "FR09A",
+              "head": "switchgear",
+              "dest_label": "PE-2FAB14",
+              "dest_detail": "Process equipment DB · LBS#5",
+              "notes": "Front right",
+              "rating_a": 800
+            },
+            {
+              "name": "FR10A",
+              "head": "switchgear",
+              "dest_label": "Spare",
+              "dest_detail": "SPARE-6 · 800A feeder spare",
+              "notes": "Front right",
+              "rating_a": 800
+            },
+            {
+              "name": "RR05A",
+              "head": "switchgear",
+              "dest_label": "PE-2FAB-96",
+              "dest_detail": "800A feeder",
+              "notes": "Rear right",
+              "rating_a": 800
+            },
+            {
+              "name": "RR06A",
+              "head": "switchgear",
+              "dest_label": "ART402",
+              "dest_detail": "RTA (non metal)",
+              "notes": "Rear right",
+              "rating_a": 800
+            },
+            {
+              "name": "RR07A",
+              "head": "switchgear",
+              "dest_label": "AWS105",
+              "dest_detail": "Wet strip (FE)",
+              "notes": "Rear right",
+              "rating_a": 500
+            },
+            {
+              "name": "RR08A",
+              "head": "switchgear",
+              "dest_label": "Spare",
+              "dest_detail": "WC0101 · spare",
+              "notes": "Rear right",
+              "rating_a": 800
+            },
+            {
+              "name": "RR09A",
+              "head": "switchgear",
+              "dest_label": "AWS202",
+              "dest_detail": "Wet strip (FE IMP)",
+              "notes": "Rear right",
+              "rating_a": 800
+            }
+          ]
+        }
+      ],
+      "couplers": [
+        {
+          "name": "PE 1-BS",
+          "left": "Section A (FL/RL)",
+          "right": "Section B (FR/RR)",
+          "closed": false,
+          "rating_a": 5000
+        }
+      ]
+    }
+  ]
+}

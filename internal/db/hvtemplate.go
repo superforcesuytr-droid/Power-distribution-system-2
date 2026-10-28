@@ -59,6 +59,8 @@ type templateFeeder struct {
 	Voltage    string           `json:"voltage"`
 	Source     string           `json:"source"`
 	OffsetX    *float64         `json:"offset_x"`
+	RatingA    *float64         `json:"rating_a"`
+	Side       string           `json:"side"`
 	Taps       string           `json:"taps"`
 	Devices    []templateDevice `json:"devices"`
 }
@@ -69,22 +71,27 @@ type templateWay struct {
 	HeadName   *string          `json:"head_name"`
 	DestLabel  string           `json:"dest_label"`
 	DestDetail string           `json:"dest_detail"`
+	RatingA    *float64         `json:"rating_a"`
+	Side       string           `json:"side"`
+	Notes      string           `json:"notes"`
 	Feeds      string           `json:"feeds"`
 	Devices    []templateDevice `json:"devices"`
 }
 
 type templateDevice struct {
-	Kind  string   `json:"kind"`
-	Name  string   `json:"name"`
-	KVA   *float64 `json:"kva"`
-	Ratio string   `json:"ratio"`
+	Kind    string   `json:"kind"`
+	Name    string   `json:"name"`
+	KVA     *float64 `json:"kva"`
+	Ratio   string   `json:"ratio"`
+	RatingA *float64 `json:"rating_a"`
 }
 
 type templateCoupler struct {
-	Name   string `json:"name"`
-	Left   string `json:"left"`
-	Right  string `json:"right"`
-	Closed bool   `json:"closed"`
+	Name    string   `json:"name"`
+	Left    string   `json:"left"`
+	Right   string   `json:"right"`
+	Closed  bool     `json:"closed"`
+	RatingA *float64 `json:"rating_a"`
 }
 
 func loadTemplates() ([]HVTemplate, error) {
@@ -180,8 +187,8 @@ func (s *Store) CreateHVNetworkFromTemplate(ctx context.Context, role, key, name
 		secPos, wayPos, feederPos := 0, 0, 0 // positions run across the drawing, in drawing order
 
 		device := func(ownerCol string, owner int64, pos int, d templateDevice) error {
-			_, err := tx.Exec(ctx, `INSERT INTO hv_devices (`+ownerCol+`, kind, name, kva, ratio, position)
-				VALUES ($1, $2::hv_device_kind, $3, $4, $5, $6)`, owner, d.Kind, d.Name, d.KVA, d.Ratio, pos)
+			_, err := tx.Exec(ctx, `INSERT INTO hv_devices (`+ownerCol+`, kind, name, kva, ratio, rating_a, position)
+				VALUES ($1, $2::hv_device_kind, $3, $4, $5, $6, $7)`, owner, d.Kind, d.Name, d.KVA, d.Ratio, d.RatingA, pos)
 			if err != nil {
 				return fmt.Errorf("%s on %s: %w", d.Kind, d.Name, err)
 			}
@@ -217,9 +224,9 @@ func (s *Store) CreateHVNetworkFromTemplate(ctx context.Context, role, key, name
 					}
 					var fid int64
 					if err := tx.QueryRow(ctx, `INSERT INTO hv_feeders
-						(network_id, section_id, name, switchgear, kind, voltage, source, position, offset_x)
-						VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
-						netID, sid, f.Name, f.Switchgear, kind, f.Voltage, f.Source, feederPos, f.OffsetX).Scan(&fid); err != nil {
+						(network_id, section_id, name, switchgear, kind, voltage, source, position, offset_x, rating_a, side)
+						VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+						netID, sid, f.Name, f.Switchgear, kind, f.Voltage, f.Source, feederPos, f.OffsetX, f.RatingA, f.Side).Scan(&fid); err != nil {
 						return fmt.Errorf("incomer %s: %w", f.Name, err)
 					}
 					feederPos++
@@ -229,6 +236,10 @@ func (s *Store) CreateHVNetworkFromTemplate(ctx context.Context, role, key, name
 						devs = []templateDevice{{Kind: "switchgear", Name: f.Switchgear}}
 					}
 					for i, d := range devs {
+						// The incomer's own switchgear carries the incomer's rating.
+						if d.Kind == "switchgear" && d.RatingA == nil {
+							d.RatingA = f.RatingA
+						}
 						if err := device("feeder_id", fid, i, d); err != nil {
 							return err
 						}
@@ -241,9 +252,9 @@ func (s *Store) CreateHVNetworkFromTemplate(ctx context.Context, role, key, name
 				for _, w := range sec.Ways {
 					var wid int64
 					if err := tx.QueryRow(ctx, `INSERT INTO hv_ways
-						(section_id, name, position, dest_label, dest_detail)
-						VALUES ($1,$2,$3,$4,$5) RETURNING id`,
-						sid, w.Name, wayPos, w.DestLabel, w.DestDetail).Scan(&wid); err != nil {
+						(section_id, name, position, dest_label, dest_detail, rating_a, side, notes)
+						VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+						sid, w.Name, wayPos, w.DestLabel, w.DestDetail, w.RatingA, w.Side, w.Notes).Scan(&wid); err != nil {
 						return fmt.Errorf("way %s: %w", w.Name, err)
 					}
 					wayPos++
@@ -262,7 +273,7 @@ func (s *Store) CreateHVNetworkFromTemplate(ctx context.Context, role, key, name
 						if w.HeadName != nil {
 							headName = *w.HeadName
 						}
-						if err := device("way_id", wid, pos, templateDevice{Kind: w.Head, Name: headName}); err != nil {
+						if err := device("way_id", wid, pos, templateDevice{Kind: w.Head, Name: headName, RatingA: w.RatingA}); err != nil {
 							return err
 						}
 						pos++
@@ -285,8 +296,8 @@ func (s *Store) CreateHVNetworkFromTemplate(ctx context.Context, role, key, name
 					return &UserError{"Coupler " + c.Name + " ties a section " + b.Name + " does not have."}
 				}
 				if _, err := tx.Exec(ctx, `INSERT INTO hv_couplers
-					(network_id, name, left_section_id, right_section_id, closed)
-					VALUES ($1,$2,$3,$4,$5)`, netID, c.Name, l, r, c.Closed); err != nil {
+					(network_id, name, left_section_id, right_section_id, closed, rating_a)
+					VALUES ($1,$2,$3,$4,$5,$6)`, netID, c.Name, l, r, c.Closed, c.RatingA); err != nil {
 					return fmt.Errorf("coupler %s: %w", c.Name, err)
 				}
 			}
