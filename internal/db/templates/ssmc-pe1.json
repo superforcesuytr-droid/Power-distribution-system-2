@@ -1,13 +1,13 @@
 {
   "key": "ssmc-pe1",
   "name": "PE 1 Switchboard",
-  "description": "PE 1 low-tension switchboard: incomer 1 (FL04E, from TX17) and incomer 2 (FR04E, from TX18), 5000 A each, joined by bus section switch PE 1-BS, with the 800 A ways on the front-left, rear-left, front-right and rear-right panels, as labelled on site.",
+  "description": "PE 1 400 V low-tension switchboard: incomer 1 (FL04E, from 6.6 kV/400 V transformer TX17) and incomer 2 (FR04E, from TX18), 5000 A each, joined by bus section switch PE 1-BS, with the 800 A ways on the front-left, rear-left, front-right and rear-right panels, as labelled on site.",
   "tier": "lt",
-  "voltage": "",
+  "voltage": "400V",
   "boards": [
     {
       "name": "PE 1",
-      "voltage": "",
+      "voltage": "400V",
       "phases": "",
       "frequency": "",
       "current_a": 5000,
@@ -24,14 +24,16 @@
               "devices": [
                 {
                   "kind": "transformer",
-                  "name": "TX17"
+                  "name": "TX17",
+                  "ratio": "6.6kV / 400V"
                 },
                 {
                   "kind": "switchgear",
                   "name": "PE 1-INC.1"
                 }
               ],
-              "offset_x": 0.96
+              "offset_x": 0.96,
+              "voltage": "6.6kV"
             }
           ],
           "ways": [
@@ -120,14 +122,16 @@
               "devices": [
                 {
                   "kind": "transformer",
-                  "name": "TX18"
+                  "name": "TX18",
+                  "ratio": "6.6kV / 400V"
                 },
                 {
                   "kind": "switchgear",
                   "name": "PE 1-INC 2"
                 }
               ],
-              "offset_x": 0.04
+              "offset_x": 0.04,
+              "voltage": "6.6kV"
             }
           ],
           "ways": [
