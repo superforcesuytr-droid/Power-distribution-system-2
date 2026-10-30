@@ -2741,13 +2741,13 @@
     formModal('Add a ready-made board', `
       ${field('Board', 'key', list[0].key, { type: 'select', required: true, full: true,
         options: list.map(t => ({ value: t.key, label: `${t.code} - ${t.counts.incomers} incomer${t.counts.incomers === 1 ? '' : 's'}, ${t.counts.mccbs} outgoing breakers` })),
-        hint: list.length === 1 ? list[0].description : 'Every breaker is put in with its rating, what it feeds and where its panel stands.' })}
+        hint: (list.length === 1 ? list[0].description + ' ' : '') + 'If the board is already here (say PE1 for PE 1), it is filled in rather than added twice.' })}
       ${field('Building', 'building_id', (ov.buildings[0] || {}).id, { type: 'select', required: true, full: true,
         options: ov.buildings.map(x => ({ value: x.id, label: x.name })) })}`,
       async d => {
         const r = await api('POST', '/api/board-templates/' + d.key, { building_id: Number(d.building_id) });
         state.boardId = r.id;
-        await afterChange('Board added');
+        await afterChange(r.filled ? 'Filled in the board already here' : 'Board added');
         navigate(boardHash('sld', r.id));
       }, { submitLabel: 'Add board' });
   }

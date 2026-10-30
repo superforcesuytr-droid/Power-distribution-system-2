@@ -140,11 +140,14 @@ func BoardTemplates() ([]BoardTemplate, error) {
 }
 
 // CreateBoardFromTemplate adds a ready-made board to a building, with its
-// supply and every outgoing breaker, all of it or none of it.
-func (s *Store) CreateBoardFromTemplate(ctx context.Context, role, key string, buildingID int64) (int64, error) {
+// supply and every outgoing breaker, all of it or none of it. When the room's
+// board is already there under a code that reads the same ("PE1" for "PE 1"),
+// the layout fills that board in instead: its own code, building and anything
+// already entered stay, and only what is missing is added.
+func (s *Store) CreateBoardFromTemplate(ctx context.Context, role, key string, buildingID int64) (int64, bool, error) {
 	all, err := loadBoardTemplates()
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	var t *BoardTemplate
 	for i := range all {
@@ -153,44 +156,79 @@ func (s *Store) CreateBoardFromTemplate(ctx context.Context, role, key string, b
 		}
 	}
 	if t == nil {
-		return 0, &UserError{"There is no ready-made board called " + key + "."}
+		return 0, false, &UserError{"There is no ready-made board called " + key + "."}
 	}
 	var id int64
+	var filled bool
 	err = s.withTx(ctx, func(tx pgx.Tx) error {
-		var taken bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM boards WHERE upper(code) = upper($1))`, t.Code).Scan(&taken); err != nil {
+		existing, code, err := boardLike(ctx, tx, t.Code, 0)
+		if err != nil {
 			return err
-		}
-		if taken {
-			return &UserError{"There is already a board called " + t.Code + "."}
 		}
 		bs := model.BusSection{}
 		if t.BusSection != nil {
 			bs = *t.BusSection
 		}
-		if err := tx.QueryRow(ctx, `INSERT INTO boards (building_id, code, voltage, phases, location, position,
-			bus_section_name, bus_section_panel, bus_section_rating_a, bus_section_closed)
-			VALUES ($1,$2,$3,$4,$5,(SELECT coalesce(max(position),-1)+1 FROM boards WHERE building_id = $1),$6,$7,$8,$9)
-			RETURNING id`, buildingID, t.Code, t.Voltage, t.Phases, t.Location,
-			bs.BusSectionName, bs.BusSectionPanel, bs.BusSectionRatingA, bs.BusSectionClosed).Scan(&id); err != nil {
-			return err
+		if existing != 0 {
+			id, filled = existing, true
+			if _, err := tx.Exec(ctx, `UPDATE boards SET
+				voltage = CASE WHEN voltage = '' THEN $2 ELSE voltage END,
+				phases = CASE WHEN phases = '' THEN $3 ELSE phases END,
+				location = CASE WHEN location = '' THEN $4 ELSE location END,
+				bus_section_name = CASE WHEN bus_section_name = '' THEN $5 ELSE bus_section_name END,
+				bus_section_panel = CASE WHEN bus_section_name = '' THEN $6 ELSE bus_section_panel END,
+				bus_section_rating_a = CASE WHEN bus_section_name = '' THEN $7 ELSE bus_section_rating_a END,
+				bus_section_closed = CASE WHEN bus_section_name = '' THEN $8 ELSE bus_section_closed END,
+				updated_at = now() WHERE id = $1`, id, t.Voltage, t.Phases, t.Location,
+				bs.BusSectionName, bs.BusSectionPanel, bs.BusSectionRatingA, bs.BusSectionClosed); err != nil {
+				return err
+			}
+		} else {
+			code = t.Code
+			if err := tx.QueryRow(ctx, `INSERT INTO boards (building_id, code, voltage, phases, location, position,
+				bus_section_name, bus_section_panel, bus_section_rating_a, bus_section_closed)
+				VALUES ($1,$2,$3,$4,$5,(SELECT coalesce(max(position),-1)+1 FROM boards WHERE building_id = $1),$6,$7,$8,$9)
+				RETURNING id`, buildingID, t.Code, t.Voltage, t.Phases, t.Location,
+				bs.BusSectionName, bs.BusSectionPanel, bs.BusSectionRatingA, bs.BusSectionClosed).Scan(&id); err != nil {
+				return err
+			}
 		}
 		for _, in := range t.Incomers {
 			if _, err := tx.Exec(ctx, `INSERT INTO board_incomers
 				(board_id, section, name, panel, transformer, ratio, rating_a, source)
-				VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, id, sectionOr(in.Section), in.Name, in.Panel,
+				VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (board_id, section) DO NOTHING`, id, sectionOr(in.Section), in.Name, in.Panel,
 				in.Transformer, in.Ratio, in.RatingA, in.Source); err != nil {
 				return fmt.Errorf("incomer %s: %w", in.Name, err)
 			}
 		}
-		for i, m := range t.MCCBs {
-			if _, err := tx.Exec(ctx, `INSERT INTO mccbs (board_id, name, rating_a, section, feeds, location, position)
-				VALUES ($1,$2,$3,$4,$5,$6,$7)`, id, m.Name, m.RatingA, sectionOr(m.Section), m.Feeds, m.Location, i); err != nil {
+		added := 0
+		for _, m := range t.MCCBs {
+			// A breaker already entered keeps its name, rating and MCBs and
+			// takes only the half of the bus, what it feeds and where it is.
+			tag, err := tx.Exec(ctx, `UPDATE mccbs SET section = $3,
+				feeds = CASE WHEN feeds = '' THEN $4 ELSE feeds END,
+				location = CASE WHEN location = '' THEN $5 ELSE location END, updated_at = now()
+				WHERE board_id = $1 AND `+nameKey+` = upper(regexp_replace($2, '[^[:alnum:]]', '', 'g'))`,
+				id, m.Name, sectionOr(m.Section), m.Feeds, m.Location)
+			if err != nil {
 				return fmt.Errorf("breaker %s: %w", m.Name, err)
 			}
+			if tag.RowsAffected() > 0 {
+				continue
+			}
+			if _, err := tx.Exec(ctx, `INSERT INTO mccbs (board_id, name, rating_a, section, feeds, location, position)
+				VALUES ($1,$2,$3,$4,$5,$6,(SELECT coalesce(max(position),-1)+1 FROM mccbs WHERE board_id = $1))`,
+				id, m.Name, m.RatingA, sectionOr(m.Section), m.Feeds, m.Location); err != nil {
+				return fmt.Errorf("breaker %s: %w", m.Name, err)
+			}
+			added++
+		}
+		if filled {
+			return s.audit(ctx, tx, role, "update", "board", id,
+				fmt.Sprintf("Filled in %s from its ready-made layout: %d breakers added, %d already there", code, added, len(t.MCCBs)-added))
 		}
 		return s.audit(ctx, tx, role, "create", "board", id,
-			fmt.Sprintf("Added board %s from its ready-made layout, with %d outgoing breakers", t.Code, len(t.MCCBs)))
+			fmt.Sprintf("Added board %s from its ready-made layout, with %d outgoing breakers", code, len(t.MCCBs)))
 	})
-	return id, err
+	return id, filled, err
 }

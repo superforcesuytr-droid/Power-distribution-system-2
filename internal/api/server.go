@@ -886,12 +886,12 @@ func (s *Server) handleBoardTemplateCreate(w http.ResponseWriter, r *http.Reques
 		fail(w, &db.UserError{Msg: "Choose the building the board is in."})
 		return
 	}
-	id, err := s.Store.CreateBoardFromTemplate(ctx(r), roleOf(r), r.PathValue("key"), in.BuildingID)
+	id, filled, err := s.Store.CreateBoardFromTemplate(ctx(r), roleOf(r), r.PathValue("key"), in.BuildingID)
 	if err != nil {
 		fail(w, err)
 		return
 	}
-	writeJSON(w, 201, map[string]int64{"id": id})
+	writeJSON(w, 201, map[string]any{"id": id, "filled": filled})
 }
 
 func (s *Server) handleMCCBDelete(w http.ResponseWriter, r *http.Request) {

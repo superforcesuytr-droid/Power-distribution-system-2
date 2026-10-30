@@ -1,6 +1,6 @@
 {
   "key": "ssmc-pe1",
-  "code": "PE 1",
+  "code": "PE1",
   "voltage": "400V",
   "phases": "3PH",
   "location": "PE 1 switch room",

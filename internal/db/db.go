@@ -196,6 +196,7 @@ func (s *Store) Connect(ctx context.Context, dsn string) error {
 	if err := s.reloadSettings(ctx); err != nil {
 		log.Printf("warning: could not load settings: %v", err)
 	}
+	s.mergeLookalikeBoards(ctx)
 	log.Printf("database connected: %s", s.server)
 	return nil
 }
@@ -894,6 +895,9 @@ func (s *Store) DeleteBuilding(ctx context.Context, role string, id int64) error
 func (s *Store) CreateBoard(ctx context.Context, role string, b model.Board) (int64, error) {
 	var id int64
 	err := s.withTx(ctx, func(tx pgx.Tx) error {
+		if err := refuseLookalike(ctx, tx, b.Code, 0); err != nil {
+			return err
+		}
 		if err := tx.QueryRow(ctx, `INSERT INTO boards (building_id, code, voltage, phases, level, location, technician, position)
 			VALUES ($1,$2,$3,$4,$5,$6,$7, (SELECT coalesce(max(position),-1)+1 FROM boards WHERE building_id = $1)) RETURNING id`,
 			b.BuildingID, b.Code, b.Voltage, b.Phases, b.Level, b.Location, b.Technician).Scan(&id); err != nil {
@@ -906,6 +910,9 @@ func (s *Store) CreateBoard(ctx context.Context, role string, b model.Board) (in
 
 func (s *Store) UpdateBoard(ctx context.Context, role string, b model.Board) error {
 	return s.withTx(ctx, func(tx pgx.Tx) error {
+		if err := refuseLookalike(ctx, tx, b.Code, b.ID); err != nil {
+			return err
+		}
 		tag, err := tx.Exec(ctx, `UPDATE boards SET building_id = $2, code = $3, voltage = $4, phases = $5, level = $6, location = $7,
 			technician = $8, updated_at = now() WHERE id = $1`,
 			b.ID, b.BuildingID, b.Code, b.Voltage, b.Phases, b.Level, b.Location, b.Technician)
