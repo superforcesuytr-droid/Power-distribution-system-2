@@ -817,10 +817,19 @@
     const groups = b.mccbs.map(m => {
       const n = Math.max(1, m.mcbs.length);
       return { m, sec: split && m.section === 'B' ? 'B' : 'A', width: Math.max(MCCB_W, n * NODE_W + (n - 1) * MCB_GAP) };
-    }).sort((a, c) => (a.sec === c.sec ? 0 : a.sec === 'A' ? -1 : 1));
+    });
+    // Within each half, the breakers are kept together by where their panels
+    // stand - front left apart from rear left - in the order each place first
+    // comes up, with a wider gap between one place and the next.
+    const locKey = g => String(g.m.location || '').trim().toUpperCase();
+    const locOrder = new Map();
+    groups.forEach(g => { if (!locOrder.has(locKey(g))) locOrder.set(locKey(g), locOrder.size); });
+    groups.sort((a, c) => (a.sec === c.sec ? locOrder.get(locKey(a)) - locOrder.get(locKey(c)) : a.sec === 'A' ? -1 : 1));
+    const LOC_GAP = 120;
     const anyMCB = groups.some(g => g.m.mcbs.length);
     const nA = groups.filter(g => g.sec === 'A').length;
-    const gaps = groups.map((g, i) => i === 0 ? 0 : (split && i === nA ? BS_GAP : GROUP_GAP));
+    const gaps = groups.map((g, i) => i === 0 ? 0 : (split && i === nA ? BS_GAP
+      : (locKey(g) !== locKey(groups[i - 1]) ? LOC_GAP : GROUP_GAP)));
     // An empty half still needs room on the sheet for its incomer.
     const emptyHalf = split && (nA === 0 || nA === groups.length) ? MCCB_W + BS_GAP : 0;
     const contentW = groups.reduce((s, g) => s + g.width, 0) + gaps.reduce((s, x) => s + x, 0) + emptyHalf;
@@ -899,6 +908,20 @@
       out.push(`<text x="${cCenter}" y="${busY + 46}" text-anchor="middle" font-size="13" fill="#64748b">No MCCBs on this board${edit ? ' - use + MCCB to add the first one' : ''}</text>`);
       return wrap(W, H, out.join(''));
     }
+
+    // Each place drawn as a band behind its breakers, named under the bus.
+    const runs = [];
+    groups.forEach((g, i) => {
+      const last = runs[runs.length - 1];
+      if (last && last.sec === g.sec && last.key === locKey(g)) last.to = i;
+      else runs.push({ sec: g.sec, key: locKey(g), label: String(g.m.location || '').trim(), from: i, to: i });
+    });
+    runs.filter(r => r.key).forEach(r => {
+      const l = centers[r.from] - groups[r.from].width / 2 - 18, rr = centers[r.to] + groups[r.to].width / 2 + 18;
+      out.push(`<g class="sld-place"><title>${esc(r.label)} · ${r.to - r.from + 1} MCCB${r.to === r.from ? '' : 's'}</title>
+        <rect x="${l}" y="${busY + 14}" width="${rr - l}" height="${H - busY - 24}" rx="12" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="6 5"/>
+        <text x="${l + 12}" y="${busY + 38}" font-size="12" font-weight="700" letter-spacing="1.5" fill="#475569">${esc(r.label.toUpperCase())}</text></g>`);
+    });
 
     groups.forEach((g, gi) => {
       const m = g.m, cx = centers[gi], col = COLORS[m.level] || COLORS.normal;
