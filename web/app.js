@@ -2266,14 +2266,14 @@
             const fed = shared ? plural(box.members.length, 'supply', 'supplies') : '';
             const sub = fed || (across ? (way.dest_detail || way.dest_network_name)
               : (way.dest_detail
-                || (linked ? (way.dest_building_name || 'Open on the dashboard')
+                || (linked ? (way.dest_building_name || 'Open its diagram')
                   : (way.dest_label ? 'External' : 'Set a destination'))));
             const destAct = across ? `data-action="hv-open-drawing" data-id="${way.dest_network_id}" data-board="${way.dest_switchboard_id}"`
               : (way.dest_board_id ? `data-action="hv-open-dest" data-id="${way.dest_board_id}"`
                 : (canEdit() ? `data-action="hv-edit-way" data-id="${way.id}"` : ''));
             const names = box.members.map(m => m.way.name).join(', ');
             out.push(`<g class="${destAct ? 'hv-node ' : ''}${linked ? 'hv-linked' : ''}" ${destAct}${wGrab}>
-              <title>${esc(label)}${shared ? ' · fed by ' + esc(names) : (way.dest_detail ? ' · ' + esc(way.dest_detail) : '')}${across ? ' on ' + esc(way.dest_network_name) + ' - click to open that drawing' : (linked ? ' - click to open this board' : (destAct ? ' - click to set where this way feeds' : ''))}</title>
+              <title>${esc(label)}${shared ? ' · fed by ' + esc(names) : (way.dest_detail ? ' · ' + esc(way.dest_detail) : '')}${across ? ' on ' + esc(way.dest_network_name) + ' - click to open that drawing' : (linked ? ' - click to open its single line diagram' : (destAct ? ' - click to set where this way feeds' : ''))}</title>
               <rect x="${box.cx - box.w / 2}" y="${destY}" width="${box.w}" height="${DEST_H}" rx="8"
                     fill="${linked ? '#f2fbf6' : '#f8fafc'}" stroke="${dcol}" stroke-width="2"/>
               <text x="${box.cx}" y="${destY + 22}" text-anchor="middle" font-size="${boxFont}" font-weight="700" fill="${linked ? '#0f8a4f' : '#64748b'}">${esc(fitText(label, box.w, boxFont))}</text>
@@ -3632,7 +3632,7 @@
       case 'hv-edit-device': if (canEdit()) hvDeviceForm(hvFindDevice(id)); break;
       case 'hv-add-coupler': hvCouplerForm(null); break;
       case 'hv-edit-coupler': if (canManage()) hvCouplerForm(hvFindCoupler(id)); break;
-      case 'hv-open-dest': navigate(boardHash('dashboard', id)); break;
+      case 'hv-open-dest': state.boardId = id; navigate(boardHash('sld', id)); break;
       // Across to another drawing, landing on the switchboard the way feeds.
       case 'hv-open-drawing': navigate('#/hv/' + id + (el.dataset.board ? '?focus=hv-board-' + el.dataset.board : '')); break;
       // The same designation on another drawing.

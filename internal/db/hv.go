@@ -264,17 +264,22 @@ func (s *Store) HVNetwork(ctx context.Context, id int64) (*model.HVNetwork, erro
 		return nil, err
 	}
 
-	// Ways, with the destination resolved so the diagram can link to it.
+	// Ways, with the destination resolved so the diagram can link to it. A
+	// way whose label is a board's code ("PE 1" for board PE1) links to that
+	// board as if it had been picked.
 	var ways []model.HVWay
 	wayAt := map[int64]int{}
 	wrows, err := pool.Query(ctx, `SELECT w.id, coalesce(w.section_id, 0), w.name, w.rating_a, w.side,
-		w.dest_board_id, w.dest_switchboard_id, w.dest_label, w.dest_detail, w.notes, w.position,
+		coalesce(w.dest_board_id, lb.id), w.dest_switchboard_id, w.dest_label, w.dest_detail, w.notes, w.position,
 		w.created_at, w.updated_at, w.offset_x,
 		coalesce(bo.code, ''), coalesce(b.name, ''), coalesce(sb.name, ''),
 		coalesce(sb.network_id, 0), coalesce(sbn.name, '')
 		FROM hv_ways w
 		JOIN hv_sections sec ON sec.id = w.section_id
-		LEFT JOIN boards bo ON bo.id = w.dest_board_id
+		LEFT JOIN LATERAL (SELECT id FROM boards WHERE w.dest_board_id IS NULL AND w.dest_switchboard_id IS NULL
+			AND `+boardKey+` = upper(regexp_replace(w.dest_label, '[^[:alnum:]]', '', 'g'))
+			AND w.dest_label ~ '[[:alnum:]]' ORDER BY id LIMIT 1) lb ON true
+		LEFT JOIN boards bo ON bo.id = coalesce(w.dest_board_id, lb.id)
 		LEFT JOIN buildings b ON b.id = bo.building_id
 		LEFT JOIN hv_switchboards sb ON sb.id = w.dest_switchboard_id
 		LEFT JOIN hv_networks sbn ON sbn.id = sb.network_id
