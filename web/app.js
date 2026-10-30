@@ -419,8 +419,8 @@
     </div>`;
   }
 
-  // A switch room board's MCCBs, one line each, kept together by half of
-  // the bus and by where their panels stand, as on its single line diagram.
+  // A switch room board's MCCBs, one line each, kept together by where
+  // their panels stand.
   function mccbPlaces(b) {
     const split = boardSplit(b);
     const key = m => (split ? (m.section === 'B' ? 'B' : 'A') : '') + '|' + String(m.location || '').trim().toUpperCase();
@@ -429,7 +429,16 @@
       if (!places.has(key(m))) places.set(key(m), { m, list: [] });
       places.get(key(m)).list.push(m);
     });
-    return [...places.values()].sort((x, y) => (split && x.m.section !== y.m.section ? (x.m.section === 'B' ? 1 : -1) : 0)).map(p => `
+    // Read as the room is walked: the front row left then right, then the
+    // rear row; anywhere else after those, by half of the bus.
+    const rank = m => {
+      const l = String(m.location || '').toLowerCase();
+      const row = /front/.test(l) ? 0 : /rear|back/.test(l) ? 1 : 2;
+      const side = /left/.test(l) ? 0 : /right/.test(l) ? 1 : 2;
+      return [row, side, split && m.section === 'B' ? 1 : 0];
+    };
+    const order = (x, y) => { const a = rank(x.m), c = rank(y.m); return a[0] - c[0] || a[1] - c[1] || a[2] - c[2]; };
+    return [...places.values()].sort(order).map(p => `
       <div class="mccb-place">
         <div class="place-head">${esc([split ? 'Section ' + (p.m.section === 'B' ? 'B' : 'A') : '', (p.m.location || '').trim() || (places.size > 1 ? 'No location given' : '')].filter(Boolean).join(' · ') || 'MCCBs')}
           <span class="muted">${plural(p.list.length, 'MCCB')}</span></div>
