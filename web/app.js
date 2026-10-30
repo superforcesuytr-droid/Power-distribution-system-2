@@ -350,7 +350,6 @@
     // A switch room board stops at its MCCBs: no MCBs or circuits to count,
     // and the load is what is measured on each MCCB.
     const only = !!b.mccb_only;
-    const metered = b.mccbs.filter(m => m.load_a != null).length;
     el.innerHTML = `
       <div class="board-head">
         <div>
@@ -373,7 +372,7 @@
         <span class="cap">CURRENT TOTALS</span>
         <div class="tot"><span class="l">Total Current</span><span class="v ${levelClass(t.util_level)}">${fmtA(t.total_current)}<span class="unit">A</span></span></div>
         <div class="tot"><span class="l">${only ? 'MCCB' : 'MCB'} Capacity</span><span class="v">${fmtA(t.mcb_capacity)}<span class="unit">A</span></span></div>
-        ${only ? `<div class="tot"><span class="l">Loads entered</span><span class="v">${metered}<span class="unit">of ${b.mccbs.length}</span></span></div>` : `
+        ${only ? '' : `
         <div class="tot"><span class="l">Active Circuits</span><span class="v level-normal">${t.active_circuits}</span></div>
         <div class="tot"><span class="l">Under Maintenance</span><span class="v level-warning">${t.maintenance_circuits}</span></div>`}
         ${!only && t.inactive_circuits ? `<div class="tot"><span class="l">Inactive</span><span class="v muted">${t.inactive_circuits}</span></div>` : ''}
@@ -445,15 +444,15 @@
           <span class="name">${esc(m.name)}</span>
           <span class="pill pill-blue">${fmtA(m.rating_a)}A</span>
           ${breakerStatusBadge('mccb', m)}
-          <span class="feeds" title="${esc(m.feeds || '')}">${m.feeds ? '→ ' + esc(m.feeds) : '<span class="muted">Feeds not entered</span>'}</span>
+          <span class="feeds" title="${esc(m.feeds || '')}">${m.feeds ? '→ ' + esc(m.feeds) : ''}</span>
           <span class="load">
             ${m.load_a != null ? `${bar(m.pct, m.level)}
             <span class="cur ${levelClass(m.level)}">${fmtA(m.current)} A</span>
             <span class="muted">/ ${fmtA(m.capacity)} A</span>
-            <span class="${levelClass(m.level)}">(${m.pct}%)</span>` : `<span class="muted">No load entered</span>`}
+            <span class="${levelClass(m.level)}">(${m.pct}%)</span>` : ''}
           </span>
           ${historyButton('mccb', m.id)}
-          ${canEdit() ? `<button class="btn btn-ghost btn-sm" data-action="edit-mccb" data-id="${m.id}" title="Edit MCCB and its load">✎</button>` : ''}
+          ${canEdit() ? `<button class="btn btn-ghost btn-sm" data-action="edit-mccb" data-id="${m.id}" title="Edit MCCB">✎</button>` : ''}
           ${canManage() ? `<button class="btn btn-ghost btn-sm" data-action="delete-mccb" data-id="${m.id}" title="Delete MCCB">🗑</button>` : ''}
         </div>
       </div>`;
@@ -970,7 +969,7 @@
       out.push(breakerSymbol(cx, mccbSwY, col));
       out.push(nodeBox(cx - MCCB_W / 2, mccbBoxY, MCCB_W, MCCB_H, col, 'MCCB', m.name,
         [`Rated ${fmtA(m.rating_a)} A`,
-          b.mccb_only && m.load_a == null ? { text: 'No load entered', color: '#94a3b8' } : { text: `${fmtA(m.current)} A ${b.mccb_only ? 'load' : 'used'}`, color: col, bold: true }]
+          b.mccb_only && m.load_a == null ? null : { text: `${fmtA(m.current)} A ${b.mccb_only ? 'drawn' : 'used'}`, color: col, bold: true }].filter(Boolean)
           .concat(b.mccb_only ? [] : [`${m.mcb_count} MCB${m.mcb_count === 1 ? '' : 's'} · ${m.circuit_count} cct${m.circuit_count === 1 ? '' : 's'}`])
           .concat(m.feeds ? [{ text: '→ ' + clip(m.feeds, 27), color: '#1c2733', title: m.feeds }] : [])
           .concat(m.location ? [{ text: m.location, color: '#94a3b8' }] : []),
@@ -2847,9 +2846,9 @@
       ${kind === 'mccb' && boardSplit(board) ? field('Bus section', 'section', isEdit ? (item.section || 'A') : 'A', { type: 'select', required: true,
         options: [{ value: 'A', label: 'Section A' + incomerNote(board, 'A') }, { value: 'B', label: 'Section B' + incomerNote(board, 'B') }],
         hint: 'The half of the bus it hangs off.' }) : ''}
-      ${kind === 'mccb' ? field('Feeds', 'feeds', isEdit ? (item.feeds || '') : '', { full: true, placeholder: 'e.g. PE-2FAB3 · Process equipment DB', hint: 'What it supplies - shown on the diagram. Optional.' }) : ''}
+      ${kind === 'mccb' ? field('Load', 'feeds', isEdit ? (item.feeds || '') : '', { full: true, placeholder: 'e.g. PE-2FAB3 · Process equipment DB', hint: 'The equipment or panel this MCCB supplies - shown on the diagram. Optional.' }) : ''}
       ${kind === 'mccb' ? field('Location', 'location', isEdit ? (item.location || '') : '', { placeholder: 'e.g. Front left', attrs: 'list="mccb-locations"', hint: 'Where its panel stands. Optional.' }) : ''}
-      ${kind === 'mccb' && board.mccb_only ? field('Measured load (A)', 'load_a', isEdit && item.load_a != null ? item.load_a : '', { type: 'number', attrs: 'min="0" max="20000" step="any"', hint: 'The load read on this MCCB. Leave blank if not measured yet.' }) : ''}
+      ${kind === 'mccb' && board.mccb_only ? field('Measured current (A)', 'load_a', isEdit && item.load_a != null ? item.load_a : '', { type: 'number', attrs: 'min="0" max="20000" step="any"', hint: 'Optional: the current read on this MCCB, to show how loaded it is.' }) : ''}
       ${kind === 'mccb' ? `<datalist id="mccb-locations">${['Front left', 'Front right', 'Rear left', 'Rear right'].map(x => `<option value="${x}">`).join('')}</datalist>` : ''}`,
       async d => {
         const body = { name: d.name, rating_a: Number(d.rating_a) };
