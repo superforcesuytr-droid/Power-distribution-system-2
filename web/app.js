@@ -461,7 +461,7 @@
     return `
       <div class="mccb ${collapsed ? 'collapsed' : ''} is-${m.status || 'in_service'}" id="mccb-${m.id}">
         <div class="mccb-head">
-          <span class="caret" data-action="toggle-mccb" data-id="${m.id}">▼</span>
+          ${m.mcbs.length ? `<span class="caret" data-action="toggle-mccb" data-id="${m.id}">▼</span>` : '<span class="caret"></span>'}
           <span class="name">${esc(m.name)}</span>
           <span class="pill pill-blue">${fmtA(m.rating_a)}A</span>
           ${breakerStatusBadge('mccb', m)}
@@ -479,9 +479,7 @@
             <button class="btn btn-ghost btn-sm" data-action="edit-mccb" data-id="${m.id}" title="Edit MCCB">✎</button>` : ''}
           ${canManage() ? `<button class="btn btn-ghost btn-sm" data-action="delete-mccb" data-id="${m.id}" title="Delete MCCB">🗑</button>` : ''}
         </div>
-        <div class="mccb-body">
-          ${m.mcbs.length ? m.mcbs.map(mcbSection).join('') : '<div class="no-circuits">No MCBs under this MCCB</div>'}
-        </div>
+        ${m.mcbs.length ? `<div class="mccb-body">${m.mcbs.map(mcbSection).join('')}</div>` : ''}
       </div>`;
   }
 
