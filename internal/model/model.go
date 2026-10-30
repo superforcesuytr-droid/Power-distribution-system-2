@@ -134,17 +134,20 @@ type Building struct {
 
 // Board is a distribution board / panel (e.g. FAC5, 400V 3PH).
 type Board struct {
-	ID         int64     `json:"id"`
-	BuildingID int64     `json:"building_id"`
-	Code       string    `json:"code"`
-	Voltage    string    `json:"voltage"`
-	Phases     string    `json:"phases"`
-	Level      string    `json:"level"`
-	Location   string    `json:"location"`
-	Technician string    `json:"technician"`
-	Position   int       `json:"position"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	ID         int64  `json:"id"`
+	BuildingID int64  `json:"building_id"`
+	Code       string `json:"code"`
+	Voltage    string `json:"voltage"`
+	Phases     string `json:"phases"`
+	Level      string `json:"level"`
+	Location   string `json:"location"`
+	Technician string `json:"technician"`
+	// MCCBOnly marks a switch room board: its MCCBs feed panels and plant,
+	// with no MCBs or circuits under them, and carry their own measured load.
+	MCCBOnly  bool      `json:"mccb_only"`
+	Position  int       `json:"position"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 	BusSection
 
 	// Derived
@@ -200,6 +203,9 @@ type MCCB struct {
 	Section  string `json:"section"`
 	Feeds    string `json:"feeds"`
 	Location string `json:"location"`
+	// LoadA is the load measured on the MCCB itself, which is its load when
+	// nothing is entered beneath it.
+	LoadA *float64 `json:"load_a"`
 
 	// Derived
 	Current             float64 `json:"current"`
@@ -322,6 +328,14 @@ func (d *BoardDetail) Compute(s Settings) {
 			m.MaintenanceCircuits += b.MaintenanceCircuits
 			t.MCBCapacity += b.RatingA
 			t.MCBCount++
+		}
+		// On a switch room board an MCCB is read on its own: its measured
+		// load, against its own rating.
+		if d.MCCBOnly && len(m.MCBs) == 0 {
+			if m.LoadA != nil {
+				m.Current = *m.LoadA
+			}
+			t.MCBCapacity += m.RatingA
 		}
 		m.Pct = s.Percent(m.Current, m.Capacity)
 		m.Level = s.Level(m.Pct)

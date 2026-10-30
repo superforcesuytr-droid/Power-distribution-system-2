@@ -542,3 +542,12 @@ button.bstatus:hover { filter: brightness(.92); }
 .sup-b { grid-column: 1 / -1; }
 .sup-b[hidden] { display: none; }
 .sld-tools { display: flex; justify-content: flex-end; margin: -6px 0 10px; }
+
+/* A switch room board: one line per MCCB, kept together by where it stands. */
+.mccb-place { margin-bottom: 18px; }
+.mccb-place .place-head { display: flex; align-items: baseline; gap: 10px; margin: 0 0 8px 2px; font-size: 12px; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase; color: var(--muted); }
+.mccb-place .place-head .muted { font-weight: 500; letter-spacing: 0; text-transform: none; }
+.mccb-only { margin-bottom: 8px; }
+.mccb-only .feeds { font-size: 13px; color: var(--text); min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mccb-only .load { flex: none; }
+@media (max-width: 760px) { .mccb-only .mccb-head { flex-wrap: wrap; } .mccb-only .feeds { flex-basis: 100%; order: 5; } }

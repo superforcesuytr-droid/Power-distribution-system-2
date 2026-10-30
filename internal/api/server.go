@@ -665,6 +665,7 @@ type boardInput struct {
 	Level      string `json:"level"`
 	Location   string `json:"location"`
 	Technician string `json:"technician"`
+	MCCBOnly   bool   `json:"mccb_only"`
 }
 
 func (in boardInput) toModel(id int64) (model.Board, error) {
@@ -672,6 +673,7 @@ func (in boardInput) toModel(id int64) (model.Board, error) {
 		ID: id, BuildingID: in.BuildingID, Code: strings.ToUpper(strings.TrimSpace(in.Code)),
 		Voltage: strings.TrimSpace(in.Voltage), Phases: strings.TrimSpace(in.Phases),
 		Level: strings.TrimSpace(in.Level), Location: strings.TrimSpace(in.Location), Technician: strings.TrimSpace(in.Technician),
+		MCCBOnly: in.MCCBOnly,
 	}
 	if b.BuildingID <= 0 {
 		return b, &db.UserError{Msg: "Building is required."}
@@ -744,13 +746,14 @@ func (s *Server) handleBoardDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 type breakerInput struct {
-	BoardID  int64   `json:"board_id,omitempty"`
-	MCCBID   int64   `json:"mccb_id,omitempty"`
-	Name     string  `json:"name"`
-	RatingA  float64 `json:"rating_a"`
-	Section  string  `json:"section"`
-	Feeds    string  `json:"feeds"`
-	Location string  `json:"location"`
+	BoardID  int64    `json:"board_id,omitempty"`
+	MCCBID   int64    `json:"mccb_id,omitempty"`
+	Name     string   `json:"name"`
+	RatingA  float64  `json:"rating_a"`
+	Section  string   `json:"section"`
+	Feeds    string   `json:"feeds"`
+	Location string   `json:"location"`
+	LoadA    *float64 `json:"load_a"`
 }
 
 func (in breakerInput) validate(kind string) error {
@@ -759,6 +762,9 @@ func (in breakerInput) validate(kind string) error {
 	}
 	if in.RatingA <= 0 || in.RatingA > 10000 {
 		return &db.UserError{Msg: "Rating must be between 0 and 10000 A."}
+	}
+	if in.LoadA != nil && (*in.LoadA < 0 || *in.LoadA > 20000) {
+		return &db.UserError{Msg: "Measured load must be between 0 and 20000 A."}
 	}
 	return nil
 }
@@ -811,7 +817,7 @@ func (s *Server) handleMCCBCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, err := s.Store.CreateMCCB(ctx(r), roleOf(r), model.MCCB{BoardID: in.BoardID, Name: strings.TrimSpace(in.Name), RatingA: in.RatingA,
-		Section: in.Section, Feeds: strings.TrimSpace(in.Feeds), Location: strings.TrimSpace(in.Location)})
+		Section: in.Section, Feeds: strings.TrimSpace(in.Feeds), Location: strings.TrimSpace(in.Location), LoadA: in.LoadA})
 	if err != nil {
 		fail(w, err)
 		return
@@ -835,7 +841,7 @@ func (s *Server) handleMCCBUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Store.UpdateMCCB(ctx(r), roleOf(r), model.MCCB{ID: id, Name: strings.TrimSpace(in.Name), RatingA: in.RatingA,
-		Section: in.Section, Feeds: strings.TrimSpace(in.Feeds), Location: strings.TrimSpace(in.Location)}); err != nil {
+		Section: in.Section, Feeds: strings.TrimSpace(in.Feeds), Location: strings.TrimSpace(in.Location), LoadA: in.LoadA}); err != nil {
 		fail(w, err)
 		return
 	}

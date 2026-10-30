@@ -347,6 +347,10 @@
     }
     const t = b.totals;
     const sub = [b.level, b.location].filter(Boolean).join(', ');
+    // A switch room board stops at its MCCBs: no MCBs or circuits to count,
+    // and the load is what is measured on each MCCB.
+    const only = !!b.mccb_only;
+    const metered = b.mccbs.filter(m => m.load_a != null).length;
     el.innerHTML = `
       <div class="board-head">
         <div>
@@ -356,10 +360,10 @@
             ${canManage() ? `<button class="btn btn-ghost btn-sm" data-action="edit-board" title="Edit board">✎</button>` : ''}
             ${historyButton('board', b.id)}
           </div>
-          <div class="board-sub">${[sub, b.technician, plural(t.mccb_count, 'MCCB'), plural(t.mcb_count, 'MCB'), plural(t.circuit_count, 'circuit')].filter(Boolean).map(esc).join(' · ')}</div>
+          <div class="board-sub">${[sub, b.technician, plural(t.mccb_count, 'MCCB')].concat(only ? ['MCCBs only'] : [plural(t.mcb_count, 'MCB'), plural(t.circuit_count, 'circuit')]).filter(Boolean).map(esc).join(' · ')}</div>
         </div>
         <div class="board-actions">
-          ${canEdit() ? `<button class="btn btn-primary btn-lg" data-action="add-circuit" ${t.mcb_count ? '' : 'disabled title="Add an MCB first"'}>+ Add New Circuit</button>` : ''}
+          ${canEdit() && !only ? `<button class="btn btn-primary btn-lg" data-action="add-circuit" ${t.mcb_count ? '' : 'disabled title="Add an MCB first"'}>+ Add New Circuit</button>` : ''}
         </div>
       </div>
 
@@ -368,10 +372,11 @@
       <div class="totals">
         <span class="cap">CURRENT TOTALS</span>
         <div class="tot"><span class="l">Total Current</span><span class="v ${levelClass(t.util_level)}">${fmtA(t.total_current)}<span class="unit">A</span></span></div>
-        <div class="tot"><span class="l">MCB Capacity</span><span class="v">${fmtA(t.mcb_capacity)}<span class="unit">A</span></span></div>
+        <div class="tot"><span class="l">${only ? 'MCCB' : 'MCB'} Capacity</span><span class="v">${fmtA(t.mcb_capacity)}<span class="unit">A</span></span></div>
+        ${only ? `<div class="tot"><span class="l">Loads entered</span><span class="v">${metered}<span class="unit">of ${b.mccbs.length}</span></span></div>` : `
         <div class="tot"><span class="l">Active Circuits</span><span class="v level-normal">${t.active_circuits}</span></div>
-        <div class="tot"><span class="l">Under Maintenance</span><span class="v level-warning">${t.maintenance_circuits}</span></div>
-        ${t.inactive_circuits ? `<div class="tot"><span class="l">Inactive</span><span class="v muted">${t.inactive_circuits}</span></div>` : ''}
+        <div class="tot"><span class="l">Under Maintenance</span><span class="v level-warning">${t.maintenance_circuits}</span></div>`}
+        ${!only && t.inactive_circuits ? `<div class="tot"><span class="l">Inactive</span><span class="v muted">${t.inactive_circuits}</span></div>` : ''}
         <div class="tot util"><span class="l">Utilisation (${t.util_pct}%)</span>${bar(t.util_pct, t.util_level, 'lg')}</div>
       </div>
 
@@ -379,8 +384,9 @@
         ${canEdit() ? '<button class="btn btn-primary" data-action="add-mccb">+ Add MCCB</button>' : ''}
       </div>
 
-      ${b.mccbs.length ? b.mccbs.map(mccbSection).join('') : `
-        <div class="empty"><h2>No MCCBs on this board</h2><p>Add an MCCB, then MCBs beneath it, then circuits.</p></div>`}`;
+      ${!b.mccbs.length ? `
+        <div class="empty"><h2>No MCCBs on this board</h2><p>${only ? 'Add each MCCB with what it feeds and where its panel stands.' : 'Add an MCCB, then MCBs beneath it, then circuits.'}</p></div>`
+        : only ? mccbPlaces(b) : b.mccbs.map(m => mccbSection(m)).join('')}`;
   }
 
   function boardCard(bo) {
@@ -389,7 +395,7 @@
       <div class="sub">${esc(bo.building_name)} · ${esc(bo.voltage)} ${esc(bo.phases)}</div>
       ${bar(bo.util_pct, bo.util_level)}
       <div class="row"><span>${fmtA(bo.total_current)} / ${fmtA(bo.mcb_capacity)} A</span><span class="${levelClass(bo.util_level)}">${bo.util_pct}%</span></div>
-      <div class="row"><span>${bo.mccb_count} MCCB · ${bo.mcb_count} MCB</span><span>${plural(bo.circuit_count, 'circuit')}</span></div>
+      <div class="row"><span>${bo.mccb_count} MCCB${bo.mccb_only ? '' : ' · ' + bo.mcb_count + ' MCB'}</span><span>${plural(bo.circuit_count, 'circuit')}</span></div>
     </div>`;
   }
 
@@ -414,7 +420,43 @@
     </div>`;
   }
 
-  function mccbSection(m) {
+  // A switch room board's MCCBs, one line each, kept together by half of
+  // the bus and by where their panels stand, as on its single line diagram.
+  function mccbPlaces(b) {
+    const split = boardSplit(b);
+    const key = m => (split ? (m.section === 'B' ? 'B' : 'A') : '') + '|' + String(m.location || '').trim().toUpperCase();
+    const places = new Map();
+    b.mccbs.forEach(m => {
+      if (!places.has(key(m))) places.set(key(m), { m, list: [] });
+      places.get(key(m)).list.push(m);
+    });
+    return [...places.values()].sort((x, y) => (split && x.m.section !== y.m.section ? (x.m.section === 'B' ? 1 : -1) : 0)).map(p => `
+      <div class="mccb-place">
+        <div class="place-head">${esc([split ? 'Section ' + (p.m.section === 'B' ? 'B' : 'A') : '', (p.m.location || '').trim() || (places.size > 1 ? 'No location given' : '')].filter(Boolean).join(' · ') || 'MCCBs')}
+          <span class="muted">${plural(p.list.length, 'MCCB')}</span></div>
+        ${p.list.map(m => mccbSection(m, true)).join('')}
+      </div>`).join('');
+  }
+
+  function mccbSection(m, only) {
+    if (only) return `
+      <div class="mccb mccb-only is-${m.status || 'in_service'}" id="mccb-${m.id}">
+        <div class="mccb-head">
+          <span class="name">${esc(m.name)}</span>
+          <span class="pill pill-blue">${fmtA(m.rating_a)}A</span>
+          ${breakerStatusBadge('mccb', m)}
+          <span class="feeds" title="${esc(m.feeds || '')}">${m.feeds ? '→ ' + esc(m.feeds) : '<span class="muted">Feeds not entered</span>'}</span>
+          <span class="load">
+            ${m.load_a != null ? `${bar(m.pct, m.level)}
+            <span class="cur ${levelClass(m.level)}">${fmtA(m.current)} A</span>
+            <span class="muted">/ ${fmtA(m.capacity)} A</span>
+            <span class="${levelClass(m.level)}">(${m.pct}%)</span>` : `<span class="muted">No load entered</span>`}
+          </span>
+          ${historyButton('mccb', m.id)}
+          ${canEdit() ? `<button class="btn btn-ghost btn-sm" data-action="edit-mccb" data-id="${m.id}" title="Edit MCCB and its load">✎</button>` : ''}
+          ${canManage() ? `<button class="btn btn-ghost btn-sm" data-action="delete-mccb" data-id="${m.id}" title="Delete MCCB">🗑</button>` : ''}
+        </div>
+      </div>`;
     const collapsed = state.collapsed.has('mccb-' + m.id);
     return `
       <div class="mccb ${collapsed ? 'collapsed' : ''} is-${m.status || 'in_service'}" id="mccb-${m.id}">
@@ -842,7 +884,7 @@
     const addMcbY = mccbBoxY + MCCB_H + 42;
     let H;
     if (!groups.length) H = busY + 110;
-    else if (!anyMCB) H = mccbBoxY + MCCB_H + (edit ? 90 : 40);
+    else if (!anyMCB) H = mccbBoxY + MCCB_H + (edit && !b.mccb_only ? 90 : 40);
     else H = mcbBoxY + NODE_H + MARGIN;
 
     const startX = MARGIN + (W - MARGIN * 2 - rightExtra - contentW) / 2;
@@ -929,8 +971,9 @@
       out.push(`<line x1="${cx}" y1="${busY}" x2="${cx}" y2="${mccbBoxY}" stroke="${col}" stroke-width="3"/>`);
       out.push(breakerSymbol(cx, mccbSwY, col));
       out.push(nodeBox(cx - MCCB_W / 2, mccbBoxY, MCCB_W, MCCB_H, col, 'MCCB', m.name,
-        [`Rated ${fmtA(m.rating_a)} A`, { text: `${fmtA(m.current)} A used`, color: col, bold: true },
-          `${m.mcb_count} MCB${m.mcb_count === 1 ? '' : 's'} · ${m.circuit_count} cct${m.circuit_count === 1 ? '' : 's'}`]
+        [`Rated ${fmtA(m.rating_a)} A`,
+          b.mccb_only && m.load_a == null ? { text: 'No load entered', color: '#94a3b8' } : { text: `${fmtA(m.current)} A ${b.mccb_only ? 'load' : 'used'}`, color: col, bold: true }]
+          .concat(b.mccb_only ? [] : [`${m.mcb_count} MCB${m.mcb_count === 1 ? '' : 's'} · ${m.circuit_count} cct${m.circuit_count === 1 ? '' : 's'}`])
           .concat(m.feeds ? [{ text: '→ ' + clip(m.feeds, 27), color: '#1c2733', title: m.feeds }] : [])
           .concat(m.location ? [{ text: m.location, color: '#94a3b8' }] : []),
         m.pct, 'mccb-' + m.id, [
@@ -940,7 +983,7 @@
 
       const n = m.mcbs.length;
       if (!n) {
-        if (edit) {
+        if (edit && !b.mccb_only) {
           out.push(`<line x1="${cx}" y1="${mccbBoxY + MCCB_H}" x2="${cx}" y2="${addMcbY - 14}" stroke="${col}" stroke-width="3" stroke-dasharray="5 5"/>`);
           out.push(sldPill(cx, addMcbY, 74, '+ MCB', `data-action="add-mcb" data-id="${m.id}"`, col, 'Add an MCB under ' + m.name));
         }
@@ -2701,9 +2744,10 @@
       ${field('Phases', 'phases', isEdit ? b.phases : '3PH', { type: 'select', options: ['3PH', '1PH'].map(v => ({ value: v, label: v })) })}
       ${field('Level', 'level', isEdit ? b.level : '', { placeholder: 'Level 1' })}
       ${field('Location', 'location', isEdit ? b.location : '', { placeholder: 'Panel Room A' })}
-      ${field('Responsible technician', 'technician', isEdit ? b.technician : '', { full: true })}`,
+      ${field('Responsible technician', 'technician', isEdit ? b.technician : '', { full: true })}
+      <div class="field inline full"><input type="checkbox" name="mccb_only" id="bd_only" ${!isEdit || b.mccb_only ? 'checked' : ''}><label for="bd_only">MCCBs only - a switch room board, with no MCBs or circuits under its MCCBs</label></div>`,
       async d => {
-        const body = { building_id: Number(d.building_id), code: d.code, voltage: d.voltage, phases: d.phases, level: d.level, location: d.location, technician: d.technician };
+        const body = { building_id: Number(d.building_id), code: d.code, voltage: d.voltage, phases: d.phases, level: d.level, location: d.location, technician: d.technician, mccb_only: d.mccb_only === 'on' };
         if (isEdit) { await api('PUT', '/api/boards/' + b.id, body); await afterChange('Board updated'); }
         else { const r = await api('POST', '/api/boards', body); state.boardId = r.id; navigate(boardHash('dashboard', r.id)); toast('Board added', 'ok'); }
       },
@@ -2807,13 +2851,15 @@
         hint: 'The half of the bus it hangs off.' }) : ''}
       ${kind === 'mccb' ? field('Feeds', 'feeds', isEdit ? (item.feeds || '') : '', { full: true, placeholder: 'e.g. PE-2FAB3 · Process equipment DB', hint: 'What it supplies - shown on the diagram. Optional.' }) : ''}
       ${kind === 'mccb' ? field('Location', 'location', isEdit ? (item.location || '') : '', { placeholder: 'e.g. Front left', attrs: 'list="mccb-locations"', hint: 'Where its panel stands. Optional.' }) : ''}
+      ${kind === 'mccb' && board.mccb_only ? field('Measured load (A)', 'load_a', isEdit && item.load_a != null ? item.load_a : '', { type: 'number', attrs: 'min="0" max="20000" step="any"', hint: 'The load read on this MCCB. Leave blank if not measured yet.' }) : ''}
       ${kind === 'mccb' ? `<datalist id="mccb-locations">${['Front left', 'Front right', 'Rear left', 'Rear right'].map(x => `<option value="${x}">`).join('')}</datalist>` : ''}`,
       async d => {
         const body = { name: d.name, rating_a: Number(d.rating_a) };
-        if (kind === 'mccb') Object.assign(body, { section: d.section || 'A', feeds: d.feeds || '', location: d.location || '' });
+        if (kind === 'mccb') Object.assign(body, { section: d.section || 'A', feeds: d.feeds || '', location: d.location || '',
+          load_a: board.mccb_only ? (d.load_a === '' || d.load_a == null ? null : Number(d.load_a)) : (isEdit ? item.load_a : null) });
         if (kind === 'mccb') body.board_id = board.id; else body.mccb_id = Number(d.mccb_id);
         if (isEdit) {
-          await api('PUT', path + '/' + item.id, kind === 'mccb' ? { name: body.name, rating_a: body.rating_a, section: body.section, feeds: body.feeds, location: body.location } : { name: body.name, rating_a: body.rating_a, mccb_id: body.mccb_id });
+          await api('PUT', path + '/' + item.id, kind === 'mccb' ? { name: body.name, rating_a: body.rating_a, section: body.section, feeds: body.feeds, location: body.location, load_a: body.load_a } : { name: body.name, rating_a: body.rating_a, mccb_id: body.mccb_id });
           state.focus = kind + '-' + item.id;
           await afterChange(label + ' updated');
         } else {

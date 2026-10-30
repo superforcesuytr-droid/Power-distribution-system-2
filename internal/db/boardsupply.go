@@ -185,9 +185,9 @@ func (s *Store) CreateBoardFromTemplate(ctx context.Context, role, key string, b
 			}
 		} else {
 			code = t.Code
-			if err := tx.QueryRow(ctx, `INSERT INTO boards (building_id, code, voltage, phases, location, position,
+			if err := tx.QueryRow(ctx, `INSERT INTO boards (building_id, code, voltage, phases, location, mccb_only, position,
 				bus_section_name, bus_section_panel, bus_section_rating_a, bus_section_closed)
-				VALUES ($1,$2,$3,$4,$5,(SELECT coalesce(max(position),-1)+1 FROM boards WHERE building_id = $1),$6,$7,$8,$9)
+				VALUES ($1,$2,$3,$4,$5,true,(SELECT coalesce(max(position),-1)+1 FROM boards WHERE building_id = $1),$6,$7,$8,$9)
 				RETURNING id`, buildingID, t.Code, t.Voltage, t.Phases, t.Location,
 				bs.BusSectionName, bs.BusSectionPanel, bs.BusSectionRatingA, bs.BusSectionClosed).Scan(&id); err != nil {
 				return err
