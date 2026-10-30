@@ -1,0 +1,169 @@
+{
+  "key": "ssmc-pe1",
+  "code": "PE 1",
+  "voltage": "400V",
+  "phases": "3PH",
+  "location": "PE 1 switch room",
+  "description": "PE 1: incomer 1 (FL04E) from TX17 and incomer 2 (FR04E) from TX18, 6.6 kV/400 V, 5000 A each, joined by bus section switch PE 1-BS, with the outgoing breakers on the front and rear panels as labelled on site.",
+  "incomers": [
+    {
+      "section": "A",
+      "name": "PE 1-INC.1",
+      "panel": "FL04E",
+      "transformer": "TX17",
+      "ratio": "6.6kV / 400V",
+      "rating_a": 5000,
+      "source": "Incomer No. 1 from TX17"
+    },
+    {
+      "section": "B",
+      "name": "PE 1-INC 2",
+      "panel": "FR04E",
+      "transformer": "TX18",
+      "ratio": "6.6kV / 400V",
+      "rating_a": 5000,
+      "source": "Incomer No. 2 from TX18"
+    }
+  ],
+  "bus_section": {
+    "bus_section_name": "PE 1-BS",
+    "bus_section_panel": "FL/FRE",
+    "bus_section_rating_a": 5000,
+    "bus_section_closed": false
+  },
+  "mccbs": [
+    {
+      "name": "FL05A",
+      "rating_a": 800,
+      "section": "A",
+      "feeds": "AWC102 · Low dope clean",
+      "location": "Front left"
+    },
+    {
+      "name": "FL06A",
+      "rating_a": 800,
+      "section": "A",
+      "feeds": "PE-2FAB3 · LBS#2 · Process equipment DB",
+      "location": "Front left"
+    },
+    {
+      "name": "FL07A",
+      "rating_a": 800,
+      "section": "A",
+      "feeds": "PE-2FAB5 · LBS#3 · Process equipment DB",
+      "location": "Front left"
+    },
+    {
+      "name": "FL08A",
+      "rating_a": 800,
+      "section": "A",
+      "feeds": "PE-2FAB9 · LBS#5 · Process equipment DB",
+      "location": "Front left"
+    },
+    {
+      "name": "FL09A",
+      "rating_a": 800,
+      "section": "A",
+      "feeds": "SPARE-5 · 800A feeder spare",
+      "location": "Front left"
+    },
+    {
+      "name": "RL05A",
+      "rating_a": 800,
+      "section": "A",
+      "feeds": "SPARE-2",
+      "location": "Rear left"
+    },
+    {
+      "name": "RL06A",
+      "rating_a": 800,
+      "section": "A",
+      "feeds": "AWS104 · Wet strip (FR etch)",
+      "location": "Rear left"
+    },
+    {
+      "name": "RL07A",
+      "rating_a": 800,
+      "section": "A",
+      "feeds": "AWC202 · High dope clean",
+      "location": "Rear left"
+    },
+    {
+      "name": "RL08A",
+      "rating_a": 800,
+      "section": "A",
+      "feeds": "PE-2FAB16 · LBS#8 · Process equipment DB",
+      "location": "Rear left"
+    },
+    {
+      "name": "FR06A",
+      "rating_a": 800,
+      "section": "B",
+      "feeds": "PE-2FAB2 · LBS#8 · Process equipment DB",
+      "location": "Front right"
+    },
+    {
+      "name": "FR07A",
+      "rating_a": 800,
+      "section": "B",
+      "feeds": "PE-2FAB4 · LBS#3 · Process equipment DB",
+      "location": "Front right"
+    },
+    {
+      "name": "FR08A",
+      "rating_a": 800,
+      "section": "B",
+      "feeds": "PE-2FAB6 · LBS#2 · Process equipment DB",
+      "location": "Front right"
+    },
+    {
+      "name": "FR09A",
+      "rating_a": 800,
+      "section": "B",
+      "feeds": "PE-2FAB14 · LBS#5 · Process equipment DB",
+      "location": "Front right"
+    },
+    {
+      "name": "FR10A",
+      "rating_a": 800,
+      "section": "B",
+      "feeds": "SPARE-6 · 800A feeder spare",
+      "location": "Front right"
+    },
+    {
+      "name": "RR05A",
+      "rating_a": 800,
+      "section": "B",
+      "feeds": "PE-2FAB-96 · 800A feeder",
+      "location": "Rear right"
+    },
+    {
+      "name": "RR06A",
+      "rating_a": 800,
+      "section": "B",
+      "feeds": "ART402 · RTA (non metal)",
+      "location": "Rear right"
+    },
+    {
+      "name": "RR07A",
+      "rating_a": 500,
+      "section": "B",
+      "feeds": "AWS105 · Wet strip (FE)",
+      "location": "Rear right"
+    },
+    {
+      "name": "RR08A",
+      "rating_a": 800,
+      "section": "B",
+      "feeds": "WC0101 · Spare",
+      "location": "Rear right"
+    },
+    {
+      "name": "RR09A",
+      "rating_a": 800,
+      "section": "B",
+      "feeds": "AWS202 · Wet strip (FE IMP)",
+      "location": "Rear right"
+    }
+  ]
+}

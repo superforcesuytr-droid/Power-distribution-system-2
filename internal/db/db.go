@@ -445,7 +445,8 @@ func (s *Store) loadTrees(ctx context.Context, boardID int64) ([]model.BoardDeta
 		args = append(args, boardID)
 	}
 	rows, err := pool.Query(ctx, `SELECT bo.id, bo.building_id, bo.code, bo.voltage, bo.phases, bo.level, bo.location,
-		bo.technician, bo.position, bo.created_at, bo.updated_at, b.name
+		bo.technician, bo.position, bo.created_at, bo.updated_at, b.name,
+		bo.bus_section_name, bo.bus_section_panel, bo.bus_section_rating_a::float8, bo.bus_section_closed
 		FROM boards bo JOIN buildings b ON b.id = bo.building_id `+where+` ORDER BY bo.building_id, bo.position, bo.code`, args...)
 	if err != nil {
 		return nil, err
@@ -455,11 +456,13 @@ func (s *Store) loadTrees(ctx context.Context, boardID int64) ([]model.BoardDeta
 	for rows.Next() {
 		var d model.BoardDetail
 		if err := rows.Scan(&d.ID, &d.BuildingID, &d.Code, &d.Voltage, &d.Phases, &d.Level, &d.Location,
-			&d.Technician, &d.Position, &d.CreatedAt, &d.UpdatedAt, &d.BuildingName); err != nil {
+			&d.Technician, &d.Position, &d.CreatedAt, &d.UpdatedAt, &d.BuildingName,
+			&d.BusSectionName, &d.BusSectionPanel, &d.BusSectionRatingA, &d.BusSectionClosed); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		d.MCCBs = []model.MCCB{}
+		d.Incomers = []model.BoardIncomer{}
 		index[d.ID] = len(boards)
 		boards = append(boards, d)
 	}
@@ -476,9 +479,31 @@ func (s *Store) loadTrees(ctx context.Context, boardID int64) ([]model.BoardDeta
 		ids = append(ids, b.ID)
 	}
 
+	// Incomers
+	irows, err := pool.Query(ctx, `SELECT board_id, section, name, panel, transformer, ratio, rating_a::float8, source
+		FROM board_incomers WHERE board_id = ANY($1) ORDER BY section`, ids)
+	if err != nil {
+		return nil, err
+	}
+	for irows.Next() {
+		var bid int64
+		var in model.BoardIncomer
+		if err := irows.Scan(&bid, &in.Section, &in.Name, &in.Panel, &in.Transformer, &in.Ratio, &in.RatingA, &in.Source); err != nil {
+			irows.Close()
+			return nil, err
+		}
+		bi := index[bid]
+		boards[bi].Incomers = append(boards[bi].Incomers, in)
+	}
+	irows.Close()
+	if err := irows.Err(); err != nil {
+		return nil, err
+	}
+
 	// MCCBs
-	mrows, err := pool.Query(ctx, `SELECT id, board_id, name, rating_a, position, status::text, assigned_to, status_note, status_at
-		FROM mccbs WHERE board_id = ANY($1) ORDER BY position, name`, ids)
+	mrows, err := pool.Query(ctx, `SELECT id, board_id, name, rating_a, position, status::text, assigned_to, status_note, status_at,
+		section, feeds, location
+		FROM mccbs WHERE board_id = ANY($1) ORDER BY section, position, name`, ids)
 	if err != nil {
 		return nil, err
 	}
@@ -486,7 +511,7 @@ func (s *Store) loadTrees(ctx context.Context, boardID int64) ([]model.BoardDeta
 	for mrows.Next() {
 		var m model.MCCB
 		if err := mrows.Scan(&m.ID, &m.BoardID, &m.Name, &m.RatingA, &m.Position,
-			&m.Status, &m.AssignedTo, &m.StatusNote, &m.StatusAt); err != nil {
+			&m.Status, &m.AssignedTo, &m.StatusNote, &m.StatusAt, &m.Section, &m.Feeds, &m.Location); err != nil {
 			mrows.Close()
 			return nil, err
 		}
@@ -912,9 +937,9 @@ func (s *Store) DeleteBoard(ctx context.Context, role string, id int64) error {
 func (s *Store) CreateMCCB(ctx context.Context, role string, m model.MCCB) (int64, error) {
 	var id int64
 	err := s.withTx(ctx, func(tx pgx.Tx) error {
-		if err := tx.QueryRow(ctx, `INSERT INTO mccbs (board_id, name, rating_a, position)
-			VALUES ($1,$2,$3,(SELECT coalesce(max(position),-1)+1 FROM mccbs WHERE board_id = $1)) RETURNING id`,
-			m.BoardID, m.Name, m.RatingA).Scan(&id); err != nil {
+		if err := tx.QueryRow(ctx, `INSERT INTO mccbs (board_id, name, rating_a, section, feeds, location, position)
+			VALUES ($1,$2,$3,$4,$5,$6,(SELECT coalesce(max(position),-1)+1 FROM mccbs WHERE board_id = $1)) RETURNING id`,
+			m.BoardID, m.Name, m.RatingA, sectionOr(m.Section), m.Feeds, m.Location).Scan(&id); err != nil {
 			return err
 		}
 		return s.audit(ctx, tx, role, "create", "mccb", id, fmt.Sprintf("Added %s (%g A)", m.Name, m.RatingA))
@@ -924,7 +949,8 @@ func (s *Store) CreateMCCB(ctx context.Context, role string, m model.MCCB) (int6
 
 func (s *Store) UpdateMCCB(ctx context.Context, role string, m model.MCCB) error {
 	return s.withTx(ctx, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `UPDATE mccbs SET name = $2, rating_a = $3, updated_at = now() WHERE id = $1`, m.ID, m.Name, m.RatingA)
+		tag, err := tx.Exec(ctx, `UPDATE mccbs SET name = $2, rating_a = $3, section = $4, feeds = $5, location = $6,
+			updated_at = now() WHERE id = $1`, m.ID, m.Name, m.RatingA, sectionOr(m.Section), m.Feeds, m.Location)
 		if err != nil {
 			return err
 		}

@@ -94,6 +94,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/boards", s.requireRole(model.RoleSupervisor, s.handleBoardCreate))
 	mux.HandleFunc("PUT /api/boards/{id}", s.requireRole(model.RoleSupervisor, s.handleBoardUpdate))
 	mux.HandleFunc("DELETE /api/boards/{id}", s.requireRole(model.RoleSupervisor, s.handleBoardDelete))
+	mux.HandleFunc("PUT /api/boards/{id}/supply", s.requireRole(model.RoleSupervisor, s.handleBoardSupply))
+	mux.HandleFunc("GET /api/board-templates", s.handleBoardTemplates)
+	mux.HandleFunc("POST /api/board-templates/{key}", s.requireRole(model.RoleSupervisor, s.handleBoardTemplateCreate))
 
 	mux.HandleFunc("POST /api/mccbs", s.requireRole(model.RoleTechnician, s.handleMCCBCreate))
 	mux.HandleFunc("PUT /api/mccbs/{id}", s.requireRole(model.RoleTechnician, s.handleMCCBUpdate))
@@ -726,10 +729,13 @@ func (s *Server) handleBoardDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 type breakerInput struct {
-	BoardID int64   `json:"board_id,omitempty"`
-	MCCBID  int64   `json:"mccb_id,omitempty"`
-	Name    string  `json:"name"`
-	RatingA float64 `json:"rating_a"`
+	BoardID  int64   `json:"board_id,omitempty"`
+	MCCBID   int64   `json:"mccb_id,omitempty"`
+	Name     string  `json:"name"`
+	RatingA  float64 `json:"rating_a"`
+	Section  string  `json:"section"`
+	Feeds    string  `json:"feeds"`
+	Location string  `json:"location"`
 }
 
 func (in breakerInput) validate(kind string) error {
@@ -789,7 +795,8 @@ func (s *Server) handleMCCBCreate(w http.ResponseWriter, r *http.Request) {
 		fail(w, &db.UserError{Msg: "Board is required."})
 		return
 	}
-	id, err := s.Store.CreateMCCB(ctx(r), roleOf(r), model.MCCB{BoardID: in.BoardID, Name: strings.TrimSpace(in.Name), RatingA: in.RatingA})
+	id, err := s.Store.CreateMCCB(ctx(r), roleOf(r), model.MCCB{BoardID: in.BoardID, Name: strings.TrimSpace(in.Name), RatingA: in.RatingA,
+		Section: in.Section, Feeds: strings.TrimSpace(in.Feeds), Location: strings.TrimSpace(in.Location)})
 	if err != nil {
 		fail(w, err)
 		return
@@ -812,11 +819,79 @@ func (s *Server) handleMCCBUpdate(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	if err := s.Store.UpdateMCCB(ctx(r), roleOf(r), model.MCCB{ID: id, Name: strings.TrimSpace(in.Name), RatingA: in.RatingA}); err != nil {
+	if err := s.Store.UpdateMCCB(ctx(r), roleOf(r), model.MCCB{ID: id, Name: strings.TrimSpace(in.Name), RatingA: in.RatingA,
+		Section: in.Section, Feeds: strings.TrimSpace(in.Feeds), Location: strings.TrimSpace(in.Location)}); err != nil {
 		fail(w, err)
 		return
 	}
 	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+// handleBoardSupply sets how a board is supplied: its incomers and the bus
+// section switch between the two halves of a board fed from both ends.
+func (s *Server) handleBoardSupply(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	var in struct {
+		Incomers   []model.BoardIncomer `json:"incomers"`
+		BusSection model.BusSection     `json:"bus_section"`
+	}
+	if err := decode(r, &in); err != nil {
+		fail(w, err)
+		return
+	}
+	if len(in.Incomers) > 2 {
+		fail(w, &db.UserError{Msg: "A board has one incomer, or two with a bus section between them."})
+		return
+	}
+	for i := range in.Incomers {
+		x := &in.Incomers[i]
+		x.Name, x.Panel, x.Transformer = strings.TrimSpace(x.Name), strings.TrimSpace(x.Panel), strings.TrimSpace(x.Transformer)
+		x.Ratio, x.Source = strings.TrimSpace(x.Ratio), strings.TrimSpace(x.Source)
+		if x.RatingA != nil && (*x.RatingA <= 0 || *x.RatingA > 20000) {
+			fail(w, &db.UserError{Msg: "An incomer's rating must be between 0 and 20000 A."})
+			return
+		}
+	}
+	bs := &in.BusSection
+	bs.BusSectionName, bs.BusSectionPanel = strings.TrimSpace(bs.BusSectionName), strings.TrimSpace(bs.BusSectionPanel)
+	if err := s.Store.SetBoardSupply(ctx(r), roleOf(r), id, in.Incomers, in.BusSection); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+func (s *Server) handleBoardTemplates(w http.ResponseWriter, r *http.Request) {
+	list, err := db.BoardTemplates()
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, list)
+}
+
+func (s *Server) handleBoardTemplateCreate(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		BuildingID int64 `json:"building_id"`
+	}
+	if err := decode(r, &in); err != nil {
+		fail(w, err)
+		return
+	}
+	if in.BuildingID <= 0 {
+		fail(w, &db.UserError{Msg: "Choose the building the board is in."})
+		return
+	}
+	id, err := s.Store.CreateBoardFromTemplate(ctx(r), roleOf(r), r.PathValue("key"), in.BuildingID)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 201, map[string]int64{"id": id})
 }
 
 func (s *Server) handleMCCBDelete(w http.ResponseWriter, r *http.Request) {

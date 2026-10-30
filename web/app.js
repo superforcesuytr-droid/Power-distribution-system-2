@@ -758,9 +758,11 @@
     app.innerHTML = `
       <div class="page">
         ${boardPicker(ov.boards)}
+        ${canManage() ? '<div class="sld-tools"><button class="btn btn-sm" data-action="board-template">+ Ready-made board</button></div>' : ''}
         ${b ? `
         <div class="sld-summary">
           <span class="code">${esc(b.code)}</span>
+          ${canManage() ? '<button class="btn btn-sm" data-action="board-supply" title="Incomers and bus section">Supply</button>' : ''}
           <span class="muted">${esc(b.voltage)} ${esc(b.phases)}${[b.level, b.location].filter(Boolean).length ? ' · ' + esc([b.level, b.location].filter(Boolean).join(', ')) : ''}</span>
           <div class="counts">
             <div><div class="n">${b.totals.mccb_count}</div><div class="l">MCCBs</div></div>
@@ -804,16 +806,27 @@
   function sldSVG(b) {
     const COLORS = { normal: '#0f8a4f', warning: '#d97a06', critical: '#d32f2f', bus: '#0b74c4' };
     const edit = canEdit(), manage = canManage();
-    const NODE_W = 178, NODE_H = 150, MCB_GAP = 22, MCCB_W = 226, MCCB_H = 150, GROUP_GAP = 64, MARGIN = 40;
+    const incomers = b.incomers || [];
+    const incOf = sec => incomers.find(i => (i.section || 'A') === sec);
+    // A board fed from both ends is split by its bus section switch: section A
+    // to the left of it, B to the right, each with its own incomer.
+    const split = !!incOf('B');
+    const extra = b.mccbs.some(m => m.feeds || m.location);
+    const NODE_W = 178, NODE_H = 150, MCB_GAP = 22, MCCB_W = 226, MCCB_H = extra ? 196 : 150, GROUP_GAP = 64, MARGIN = 40;
+    const BS_GAP = split ? 260 : 0;
     const groups = b.mccbs.map(m => {
       const n = Math.max(1, m.mcbs.length);
-      return { m, width: Math.max(MCCB_W, n * NODE_W + (n - 1) * MCB_GAP) };
-    });
+      return { m, sec: split && m.section === 'B' ? 'B' : 'A', width: Math.max(MCCB_W, n * NODE_W + (n - 1) * MCB_GAP) };
+    }).sort((a, c) => (a.sec === c.sec ? 0 : a.sec === 'A' ? -1 : 1));
     const anyMCB = groups.some(g => g.m.mcbs.length);
-    const contentW = groups.reduce((s, g) => s + g.width, 0) + Math.max(0, groups.length - 1) * GROUP_GAP;
+    const nA = groups.filter(g => g.sec === 'A').length;
+    const gaps = groups.map((g, i) => i === 0 ? 0 : (split && i === nA ? BS_GAP : GROUP_GAP));
+    // An empty half still needs room on the sheet for its incomer.
+    const emptyHalf = split && (nA === 0 || nA === groups.length) ? MCCB_W + BS_GAP : 0;
+    const contentW = groups.reduce((s, g) => s + g.width, 0) + gaps.reduce((s, x) => s + x, 0) + emptyHalf;
     const rightExtra = edit ? 130 : 0;
-    const W = Math.max(560, contentW + MARGIN * 2 + rightExtra);
-    const supplyY = 30, busY = supplyY + 120;
+    const W = Math.max(split ? 980 : 560, contentW + MARGIN * 2 + rightExtra);
+    const supplyY = 30, busY = supplyY + (incomers.length ? 270 : 120);
     const mccbSwY = busY + 26, mccbBoxY = busY + 86;
     const dropGap = edit ? 84 : 56;
     const mcbBusY = mccbBoxY + MCCB_H + dropGap, mcbSwY = mcbBusY + 26, mcbBoxY = mcbBusY + 86;
@@ -825,27 +838,61 @@
 
     const startX = MARGIN + (W - MARGIN * 2 - rightExtra - contentW) / 2;
     const centers = [];
-    let x = startX;
-    groups.forEach(g => { centers.push(x + g.width / 2); x += g.width + GROUP_GAP; });
+    let x = startX + (split && nA === 0 ? emptyHalf : 0);
+    groups.forEach((g, i) => { x += gaps[i]; centers.push(x + g.width / 2); x += g.width; });
     const cCenter = groups.length ? startX + contentW / 2 : W / 2;
 
     const out = [];
-    // Incoming supply: transformer squiggle and drop to the main busbar.
-    out.push(`<g stroke="${COLORS.bus}" stroke-width="3" fill="none" stroke-linecap="round">
-      <line x1="${cCenter}" y1="${supplyY}" x2="${cCenter}" y2="${busY}"/>
-      ${[0, 1, 2].map(i => `<path d="M ${cCenter - 11} ${supplyY + 22 + i * 14} q 5.5 -8 11 0 t 11 0"/>`).join('')}
-    </g>
-    <text x="${cCenter + 22}" y="${supplyY + 26}" font-size="14" font-weight="700" fill="${COLORS.bus}">3~ ${esc(b.voltage)} ${esc(b.phases)}</text>
-    <text x="${cCenter + 22}" y="${supplyY + 45}" font-size="11" fill="#94a3b8" letter-spacing="1.5">INCOMING SUPPLY</text>`);
-
-    // Main busbar, extended to the right to carry the "add MCCB" control.
-    let busL, busR;
-    if (groups.length > 1) { busL = Math.min(centers[0], cCenter); busR = Math.max(centers[centers.length - 1], cCenter); }
-    else { busL = cCenter - 110; busR = cCenter + 110; }
+    // Where each half of the bus runs, and where the bus section switch sits.
+    const span = sec => {
+      const cs = centers.filter((_, i) => groups[i].sec === sec);
+      return cs.length ? [cs[0], cs[cs.length - 1]] : null;
+    };
+    let bsX = 0, halves;
+    if (split) {
+      const a = span('A'), c = span('B');
+      if (a && c) bsX = (a[1] + c[0]) / 2;
+      else if (a) bsX = a[1] + MCCB_W / 2 + BS_GAP / 2;
+      else if (c) bsX = c[0] - MCCB_W / 2 - BS_GAP / 2;
+      else bsX = (W - rightExtra) / 2;
+      const aR = bsX - 60, bL = bsX + 60;
+      halves = [{ sec: 'A', l: a ? Math.min(a[0], aR - 140) : aR - MCCB_W, r: aR },
+                { sec: 'B', l: bL, r: c ? Math.max(c[1], bL + 140) : bL + MCCB_W }];
+    } else {
+      let l, rr;
+      if (groups.length > 1) { l = Math.min(centers[0], cCenter); rr = Math.max(centers[centers.length - 1], cCenter); }
+      else { l = cCenter - 110; rr = cCenter + 110; }
+      halves = [{ sec: 'A', l, r: rr }];
+    }
+    const busR = halves[halves.length - 1].r;
     const addMccbX = busR + 64;
-    const busEnd = edit ? addMccbX - 38 : busR;
-    out.push(`<line x1="${busL}" y1="${busY}" x2="${busEnd}" y2="${busY}" stroke="${COLORS.bus}" stroke-width="6" stroke-linecap="round"/>`);
-    out.push(`<circle cx="${cCenter}" cy="${busY}" r="5" fill="${COLORS.bus}"/>`);
+    if (edit) halves[halves.length - 1].r = addMccbX - 38;
+
+    // The supply. A board whose incomers are on record draws each one coming
+    // in through its transformer to its incomer breaker; otherwise just the
+    // incoming supply.
+    if (!incomers.length) {
+      out.push(`<g stroke="${COLORS.bus}" stroke-width="3" fill="none" stroke-linecap="round">
+        <line x1="${cCenter}" y1="${supplyY}" x2="${cCenter}" y2="${busY}"/>
+        ${[0, 1, 2].map(i => `<path d="M ${cCenter - 11} ${supplyY + 22 + i * 14} q 5.5 -8 11 0 t 11 0"/>`).join('')}
+      </g>
+      <text x="${cCenter + 22}" y="${supplyY + 26}" font-size="14" font-weight="700" fill="${COLORS.bus}">3~ ${esc(b.voltage)} ${esc(b.phases)}</text>
+      <text x="${cCenter + 22}" y="${supplyY + 45}" font-size="11" fill="#94a3b8" letter-spacing="1.5">INCOMING SUPPLY</text>`);
+      out.push(`<circle cx="${cCenter}" cy="${busY}" r="5" fill="${COLORS.bus}"/>`);
+    }
+    halves.forEach(h => {
+      const inc = incOf(h.sec);
+      if (!inc) return;
+      // Beside the bus section, as an incomer panel stands in the room.
+      const ix = split ? (h.sec === 'A' ? h.r - 70 : h.l + 70) : cCenter;
+      out.push(sldIncomer(ix, inc, h.sec === 'A' && split ? -1 : 1));
+    });
+    halves.forEach(h => out.push(`<line x1="${h.l}" y1="${busY}" x2="${h.r}" y2="${busY}" stroke="${COLORS.bus}" stroke-width="6" stroke-linecap="round"/>`));
+    if (split) {
+      out.push(`<text x="${halves[0].l}" y="${busY - 14}" font-size="11" font-weight="700" fill="${COLORS.bus}" letter-spacing="1.5">SECTION A</text>`);
+      out.push(`<text x="${halves[1].r}" y="${busY - 14}" text-anchor="end" font-size="11" font-weight="700" fill="${COLORS.bus}" letter-spacing="1.5">SECTION B</text>`);
+      out.push(sldBusSection(bsX, halves[0].r, halves[1].l));
+    }
     if (edit) out.push(sldPill(addMccbX, busY, 76, '+ MCCB', 'data-action="add-mccb"', COLORS.bus, 'Add an MCCB to this board'));
 
     if (!groups.length) {
@@ -860,7 +907,9 @@
       out.push(breakerSymbol(cx, mccbSwY, col));
       out.push(nodeBox(cx - MCCB_W / 2, mccbBoxY, MCCB_W, MCCB_H, col, 'MCCB', m.name,
         [`Rated ${fmtA(m.rating_a)} A`, { text: `${fmtA(m.current)} A used`, color: col, bold: true },
-          `${m.mcb_count} MCB${m.mcb_count === 1 ? '' : 's'} · ${m.circuit_count} cct${m.circuit_count === 1 ? '' : 's'}`],
+          `${m.mcb_count} MCB${m.mcb_count === 1 ? '' : 's'} · ${m.circuit_count} cct${m.circuit_count === 1 ? '' : 's'}`]
+          .concat(m.feeds ? [{ text: '→ ' + clip(m.feeds, 27), color: '#1c2733', title: m.feeds }] : [])
+          .concat(m.location ? [{ text: m.location, color: '#94a3b8' }] : []),
         m.pct, 'mccb-' + m.id, [
           edit ? { icon: 'edit', action: 'edit-mccb', id: m.id, title: 'Edit ' + m.name } : null,
           manage ? { icon: 'del', action: 'delete-mccb', id: m.id, title: 'Delete ' + m.name } : null,
@@ -897,6 +946,51 @@
     });
     return wrap(W, H, out.join(''));
 
+    function clip(t, n) { t = String(t || ''); return t.length > n ? t.slice(0, n - 1) + '…' : t; }
+
+    // An incomer: where it comes from, the transformer it comes through, and
+    // the incomer breaker it lands on, dropping to its half of the bus. The
+    // labels sit on the side away from the bus section.
+    function sldIncomer(ix, inc, dir) {
+      const c = COLORS.bus, tx = ix + 26 * dir, anchor = dir < 0 ? 'end' : 'start';
+      const tY = supplyY + 70, swY = busY - 70;
+      let g = `<g><title>${esc([inc.name, inc.panel, inc.transformer, inc.ratio, inc.source].filter(Boolean).join(' · '))}</title>`;
+      g += `<line x1="${ix}" y1="${supplyY + 14}" x2="${ix}" y2="${busY}" stroke="${c}" stroke-width="3"/>`;
+      if (inc.source) g += `<text x="${ix}" y="${supplyY + 4}" text-anchor="middle" font-size="12" fill="#64748b">${esc(inc.source)}</text>`;
+      if (inc.transformer || inc.ratio) {
+        g += `<circle cx="${ix}" cy="${tY - 11}" r="17" fill="#fff" stroke="${c}" stroke-width="3"/><circle cx="${ix}" cy="${tY + 11}" r="17" fill="none" stroke="${c}" stroke-width="3"/>`;
+        g += `<text x="${tx}" y="${tY - 4}" text-anchor="${anchor}" font-size="15" font-weight="700" fill="${c}">${esc(inc.transformer || 'Transformer')}</text>`;
+        if (inc.ratio) g += `<text x="${tx}" y="${tY + 15}" text-anchor="${anchor}" font-size="12" fill="#475569">${esc(inc.ratio)}</text>`;
+      }
+      g += breakerSymbol(ix, swY, c);
+      g += `<text x="${tx}" y="${swY - 4}" text-anchor="${anchor}" font-size="14" font-weight="700" fill="#1c2733">${esc(inc.name || 'Incomer')}</text>`;
+      const sub = [inc.panel, inc.rating_a != null ? fmtA(inc.rating_a) + ' A' : ''].filter(Boolean).join(' · ');
+      if (sub) g += `<text x="${tx}" y="${swY + 14}" text-anchor="${anchor}" font-size="12" fill="#475569">${esc(sub)}</text>`;
+      g += `<circle cx="${ix}" cy="${busY}" r="6" fill="${c}"/>`;
+      return g + '</g>';
+    }
+
+    // The bus section switch between the two halves: drawn closed across the
+    // gap, or open with the gap left showing.
+    function sldBusSection(cx, l, r) {
+      const c = COLORS.bus, closed = !!b.bus_section_closed;
+      let g = `<g${manage ? ' class="sld-btn" data-action="board-supply"' : ''}><title>${esc(b.bus_section_name || 'Bus section')} · ${closed ? 'closed' : 'open'}${manage ? ' - click to change the supply' : ''}</title>`;
+      g += `<rect x="${l}" y="${busY - 40}" width="${r - l}" height="80" fill="transparent"/>`;
+      if (closed) g += `<line x1="${l}" y1="${busY}" x2="${r}" y2="${busY}" stroke="${c}" stroke-width="6"/>`;
+      else {
+        g += `<line x1="${l}" y1="${busY}" x2="${cx - 16}" y2="${busY}" stroke="${c}" stroke-width="4"/>`;
+        g += `<line x1="${cx + 16}" y1="${busY}" x2="${r}" y2="${busY}" stroke="${c}" stroke-width="4"/>`;
+      }
+      g += `<g transform="translate(${cx - 14} ${busY - 14})"><rect width="28" height="28" rx="5" fill="#fff" stroke="${c}" stroke-width="2.5"/>` +
+        (closed ? `<line x1="4" y1="14" x2="24" y2="14" stroke="${c}" stroke-width="3" stroke-linecap="round"/>`
+                : `<line x1="6" y1="22" x2="22" y2="6" stroke="${c}" stroke-width="2.5" stroke-linecap="round"/>`) + '</g>';
+      g += `<text x="${cx}" y="${busY - 30}" text-anchor="middle" font-size="13" font-weight="700" fill="#1c2733">${esc(b.bus_section_name || 'Bus section')}</text>`;
+      const sub = [b.bus_section_panel, b.bus_section_rating_a != null ? fmtA(b.bus_section_rating_a) + ' A' : ''].filter(Boolean).join(' · ');
+      if (sub) g += `<text x="${cx}" y="${busY + 34}" text-anchor="middle" font-size="12" fill="#475569">${esc(sub)}</text>`;
+      g += `<text x="${cx}" y="${busY + 50}" text-anchor="middle" font-size="11" font-weight="700" letter-spacing="1.5" fill="${closed ? '#0f8a4f' : '#94a3b8'}">${closed ? 'CLOSED' : 'OPEN'}</text>`;
+      return g + '</g>';
+    }
+
     function wrap(w, h, inner) {
       return `<svg viewBox="0 0 ${w} ${h}" width="${w}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Single line diagram of ${esc(b.code)}">${inner}</svg>`;
     }
@@ -912,7 +1006,7 @@
       lines.forEach(l => {
         ty += 22;
         const o = typeof l === 'string' ? { text: l } : l;
-        t += `<text x="${x + pad}" y="${ty}" font-size="13" font-weight="${o.bold ? 700 : 400}" fill="${o.color || '#475569'}">${esc(o.text)}</text>`;
+        t += `<text x="${x + pad}" y="${ty}" font-size="13" font-weight="${o.bold ? 700 : 400}" fill="${o.color || '#475569'}">${o.title ? `<title>${esc(o.title)}</title>` : ''}${esc(o.text)}</text>`;
       });
       const bw = w - pad * 2, by = y + h - 14;
       t += `<rect x="${x + pad}" y="${by}" width="${bw}" height="6" rx="3" fill="#e5eaf0"/><rect x="${x + pad}" y="${by}" width="${bw * Math.min(100, pct) / 100}" height="6" rx="3" fill="${col}"/>`;
@@ -2594,6 +2688,70 @@
 
   // ---- breakers
   const RATINGS = [6, 10, 16, 20, 25, 32, 40, 50, 63, 80, 100, 125, 160, 200, 250, 315, 400, 630, 800, 1000, 1250, 1600];
+  const boardSplit = bd => !!(bd && (bd.incomers || []).some(i => i.section === 'B'));
+  function incomerNote(bd, sec) {
+    const i = ((bd && bd.incomers) || []).find(x => x.section === sec);
+    return i ? ' - ' + (i.name || 'incomer') + (i.transformer ? ' from ' + i.transformer : '') : '';
+  }
+
+  // How a board is supplied: one incomer, or two - one on each half of the
+  // bus - with a bus section switch between them.
+  function boardSupplyForm(bd) {
+    const incs = bd.incomers || [];
+    const A = incs.find(i => i.section === 'A') || {}, B = incs.find(i => i.section === 'B') || {};
+    const incFields = (p, v, label) => `
+      <div class="field full"><label class="form-sub">${label}</label></div>
+      ${field('Incomer breaker', p + 'name', v.name || '', { placeholder: 'e.g. PE 1-INC.1' })}
+      ${field('Panel', p + 'panel', v.panel || '', { placeholder: 'e.g. FL04E' })}
+      ${field('Transformer', p + 'transformer', v.transformer || '', { placeholder: 'e.g. TX17' })}
+      ${field('Ratio', p + 'ratio', v.ratio || '', { placeholder: 'e.g. 6.6kV / 400V' })}
+      ${field('Rating (A)', p + 'rating', v.rating_a != null ? v.rating_a : '', { type: 'number', attrs: 'min="1" max="20000" step="any"' })}
+      ${field('Comes from', p + 'source', v.source || '', { placeholder: 'e.g. Incomer No. 1 from TX17' })}`;
+    const form = formModal('Supply to ' + bd.code, `
+      ${incFields('a_', A, 'Incomer 1 - section A')}
+      <div class="field inline full"><input type="checkbox" name="two" id="sup_two" ${B.section ? 'checked' : ''}><label for="sup_two">Fed from both ends: a second incomer and a bus section switch</label></div>
+      <div class="sup-b full form-grid" ${B.section ? '' : 'hidden'}>
+        ${incFields('b_', B, 'Incomer 2 - section B')}
+        <div class="field full"><label class="form-sub">Bus section switch</label></div>
+        ${field('Name', 'bs_name', bd.bus_section_name || '', { placeholder: 'e.g. PE 1-BS' })}
+        ${field('Panel', 'bs_panel', bd.bus_section_panel || '', { placeholder: 'e.g. FL/FRE' })}
+        ${field('Rating (A)', 'bs_rating', bd.bus_section_rating_a != null ? bd.bus_section_rating_a : '', { type: 'number', attrs: 'min="1" max="20000" step="any"' })}
+        ${field('Normally', 'bs_closed', bd.bus_section_closed ? '1' : '0', { type: 'select', options: [{ value: '0', label: 'Open' }, { value: '1', label: 'Closed' }] })}
+      </div>`,
+      async d => {
+        const num = v => (v === '' || v == null ? null : Number(v));
+        const inc = (p, sec) => ({ section: sec, name: d[p + 'name'] || '', panel: d[p + 'panel'] || '', transformer: d[p + 'transformer'] || '',
+          ratio: d[p + 'ratio'] || '', rating_a: num(d[p + 'rating']), source: d[p + 'source'] || '' });
+        const blank = i => !i.name && !i.panel && !i.transformer && !i.ratio && i.rating_a == null && !i.source;
+        const incomers = [inc('a_', 'A')].filter(i => !blank(i));
+        if (d.two === 'on') incomers.push(inc('b_', 'B'));
+        await api('PUT', '/api/boards/' + bd.id + '/supply', { incomers, bus_section: d.two === 'on' ? {
+          bus_section_name: d.bs_name || '', bus_section_panel: d.bs_panel || '', bus_section_rating_a: num(d.bs_rating), bus_section_closed: d.bs_closed === '1' } : {} });
+        await afterChange('Supply updated');
+      });
+    const two = $('#sup_two', form), sub = $('.sup-b', form);
+    if (two && sub) two.addEventListener('change', () => { sub.hidden = !two.checked; });
+  }
+
+  // A ready-made board: one written out from its panel labels, added to a
+  // building in one go.
+  async function boardTemplateForm() {
+    const [list, ov] = await Promise.all([api('GET', '/api/board-templates'), loadOverview()]);
+    if (!list.length) { toast('There are no ready-made boards', 'error'); return; }
+    formModal('Add a ready-made board', `
+      ${field('Board', 'key', list[0].key, { type: 'select', required: true, full: true,
+        options: list.map(t => ({ value: t.key, label: `${t.code} - ${t.counts.incomers} incomer${t.counts.incomers === 1 ? '' : 's'}, ${t.counts.mccbs} outgoing breakers` })),
+        hint: list.length === 1 ? list[0].description : 'Every breaker is put in with its rating, what it feeds and where its panel stands.' })}
+      ${field('Building', 'building_id', (ov.buildings[0] || {}).id, { type: 'select', required: true, full: true,
+        options: ov.buildings.map(x => ({ value: x.id, label: x.name })) })}`,
+      async d => {
+        const r = await api('POST', '/api/board-templates/' + d.key, { building_id: Number(d.building_id) });
+        state.boardId = r.id;
+        await afterChange('Board added');
+        navigate(boardHash('sld', r.id));
+      }, { submitLabel: 'Add board' });
+  }
+
   function breakerForm(kind, item, parentId) {
     const isEdit = !!(item && item.id);
     const path = kind === 'mccb' ? '/api/mccbs' : '/api/mcbs';
@@ -2615,12 +2773,19 @@
       ${parentField}
       ${field(label + ' name', 'name', isEdit ? item.name : suggestBreakerName(kind, parentId), { required: true, placeholder: kind === 'mccb' ? 'MCCB-C' : 'MCB-05' })}
       ${field('Rating (A)', 'rating_a', isEdit ? item.rating_a : (kind === 'mccb' ? 100 : 32), { type: 'number', required: true, attrs: 'min="1" max="10000" step="any" list="ratings"', hint: 'Capacity shown on the diagram = rating × ' + (state.overview ? state.overview.settings.trip_factor : 1.14) })}
-      <datalist id="ratings">${RATINGS.map(r => `<option value="${r}">`).join('')}</datalist>`,
+      <datalist id="ratings">${RATINGS.map(r => `<option value="${r}">`).join('')}</datalist>
+      ${kind === 'mccb' && boardSplit(board) ? field('Bus section', 'section', isEdit ? (item.section || 'A') : 'A', { type: 'select', required: true,
+        options: [{ value: 'A', label: 'Section A' + incomerNote(board, 'A') }, { value: 'B', label: 'Section B' + incomerNote(board, 'B') }],
+        hint: 'The half of the bus it hangs off.' }) : ''}
+      ${kind === 'mccb' ? field('Feeds', 'feeds', isEdit ? (item.feeds || '') : '', { full: true, placeholder: 'e.g. PE-2FAB3 · Process equipment DB', hint: 'What it supplies - shown on the diagram. Optional.' }) : ''}
+      ${kind === 'mccb' ? field('Location', 'location', isEdit ? (item.location || '') : '', { placeholder: 'e.g. Front left', attrs: 'list="mccb-locations"', hint: 'Where its panel stands. Optional.' }) : ''}
+      ${kind === 'mccb' ? `<datalist id="mccb-locations">${['Front left', 'Front right', 'Rear left', 'Rear right'].map(x => `<option value="${x}">`).join('')}</datalist>` : ''}`,
       async d => {
         const body = { name: d.name, rating_a: Number(d.rating_a) };
+        if (kind === 'mccb') Object.assign(body, { section: d.section || 'A', feeds: d.feeds || '', location: d.location || '' });
         if (kind === 'mccb') body.board_id = board.id; else body.mccb_id = Number(d.mccb_id);
         if (isEdit) {
-          await api('PUT', path + '/' + item.id, kind === 'mccb' ? { name: body.name, rating_a: body.rating_a } : { name: body.name, rating_a: body.rating_a, mccb_id: body.mccb_id });
+          await api('PUT', path + '/' + item.id, kind === 'mccb' ? { name: body.name, rating_a: body.rating_a, section: body.section, feeds: body.feeds, location: body.location } : { name: body.name, rating_a: body.rating_a, mccb_id: body.mccb_id });
           state.focus = kind + '-' + item.id;
           await afterChange(label + ' updated');
         } else {
@@ -3428,6 +3593,8 @@
       case 'add-board': boardForm(null, Number(el.dataset.building) || (state.board && state.board.building_id)); break;
       case 'edit-board': boardForm(state.board); break;
       case 'add-mccb': breakerForm('mccb', null); break;
+      case 'board-supply': if (canManage() && state.board) boardSupplyForm(state.board); break;
+      case 'board-template': if (canManage()) boardTemplateForm(); break;
       case 'edit-mccb': breakerForm('mccb', findMCCB(id)); break;
       case 'asset-history': assetHistory(el.dataset.entity, id).catch(err => toast(err.message, 'error')); break;
       case 'breaker-status': breakerStatusForm(el.dataset.kind, el.dataset.kind === 'mccb' ? findMCCB(id) : findMCB(id)); break;

@@ -145,9 +145,32 @@ type Board struct {
 	Position   int       `json:"position"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
+	BusSection
 
 	// Derived
 	BuildingName string `json:"building_name"`
+}
+
+// BusSection is the switch joining the two halves of a board fed from both
+// ends. A board with a single incomer has none, and leaves it blank.
+type BusSection struct {
+	BusSectionName    string   `json:"bus_section_name"`
+	BusSectionPanel   string   `json:"bus_section_panel"`
+	BusSectionRatingA *float64 `json:"bus_section_rating_a"`
+	BusSectionClosed  bool     `json:"bus_section_closed"`
+}
+
+// BoardIncomer is one supply into a board: the transformer it comes through
+// and the incomer breaker it lands on. Section A is the left half of the bus,
+// B the right half of a board split by a bus section switch.
+type BoardIncomer struct {
+	Section     string   `json:"section"`
+	Name        string   `json:"name"`
+	Panel       string   `json:"panel"`
+	Transformer string   `json:"transformer"`
+	Ratio       string   `json:"ratio"`
+	RatingA     *float64 `json:"rating_a"`
+	Source      string   `json:"source"`
 }
 
 // BoardSummary is a Board with roll-up figures for list views.
@@ -172,6 +195,11 @@ type MCCB struct {
 	Position int     `json:"position"`
 	MCBs     []MCB   `json:"mcbs"`
 	BreakerStatus
+	// Section is the half of the bus it hangs off (A, or B on a split board);
+	// Feeds is what it supplies and Location where its panel stands.
+	Section  string `json:"section"`
+	Feeds    string `json:"feeds"`
+	Location string `json:"location"`
 
 	// Derived
 	Current             float64 `json:"current"`
@@ -253,8 +281,9 @@ type BoardTotals struct {
 // BoardDetail is the full breaker tree for one board with all metrics.
 type BoardDetail struct {
 	Board
-	MCCBs  []MCCB      `json:"mccbs"`
-	Totals BoardTotals `json:"totals"`
+	Incomers []BoardIncomer `json:"incomers"`
+	MCCBs    []MCCB         `json:"mccbs"`
+	Totals   BoardTotals    `json:"totals"`
 }
 
 // Compute fills in every derived field of the tree in place.

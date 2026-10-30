@@ -534,3 +534,9 @@ button.bstatus:hover { filter: brightness(.92); }
 .mkind-repair, .mkind-replacement { background: var(--amber-soft); color: #9a5b00; }
 .mkind-test { background: var(--green-soft); color: var(--green); }
 .mkind-incident { background: var(--red-soft); color: var(--red); }
+
+/* Board supply form and SLD tools */
+.form-sub { font-weight: 700; color: var(--text); letter-spacing: .02em; border-bottom: 1px solid var(--border); padding-bottom: 4px; width: 100%; }
+.sup-b { grid-column: 1 / -1; }
+.sup-b[hidden] { display: none; }
+.sld-tools { display: flex; justify-content: flex-end; margin: -6px 0 10px; }
