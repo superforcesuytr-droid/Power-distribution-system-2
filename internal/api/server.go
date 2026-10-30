@@ -78,6 +78,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/mcbs/{id}/next-code", s.handleNextCode)
 	mux.HandleFunc("GET /api/search", s.handleSearch)
 	mux.HandleFunc("GET /api/hv/search", s.handleHVSearch)
+	mux.HandleFunc("GET /api/boards/{id}/hv-feed", s.handleBoardFeed)
 	mux.HandleFunc("GET /api/mccbs", s.handleMCCBNames)
 	mux.HandleFunc("GET /api/audit", s.handleAudit)
 	mux.HandleFunc("GET /api/history/{entity}/{id}", s.handleAssetHistory)
@@ -556,6 +557,20 @@ func (s *Server) handleHVSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, hits)
+}
+
+func (s *Server) handleBoardFeed(w http.ResponseWriter, r *http.Request) {
+	id, err := pathID(r)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	hit, err := s.Store.BoardFeed(ctx(r), id, r.URL.Query().Get("tx"))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, 200, hit)
 }
 
 func (s *Server) handleMCCBNames(w http.ResponseWriter, r *http.Request) {

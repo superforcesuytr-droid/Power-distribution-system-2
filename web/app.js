@@ -956,12 +956,17 @@
       const tY = supplyY + 70, swY = busY - 70;
       let g = `<g><title>${esc([inc.name, inc.panel, inc.transformer, inc.ratio, inc.source].filter(Boolean).join(' · '))}</title>`;
       g += `<line x1="${ix}" y1="${supplyY + 14}" x2="${ix}" y2="${busY}" stroke="${c}" stroke-width="3"/>`;
+      // Where the supply comes from opens that transformer on the HV overview.
+      const up = inc.transformer || inc.source;
+      if (up) g += `<g class="sld-btn sld-up" data-action="sld-open-hv" data-q="${esc(up)}"><title>${esc(up)} - click to find it on the HV overview</title>` +
+        `<rect x="${ix - 150}" y="${supplyY - 12}" width="300" height="${tY - supplyY + 42}" fill="transparent"/>`;
       if (inc.source) g += `<text x="${ix}" y="${supplyY + 4}" text-anchor="middle" font-size="12" fill="#64748b">${esc(inc.source)}</text>`;
       if (inc.transformer || inc.ratio) {
         g += `<circle cx="${ix}" cy="${tY - 11}" r="17" fill="#fff" stroke="${c}" stroke-width="3"/><circle cx="${ix}" cy="${tY + 11}" r="17" fill="none" stroke="${c}" stroke-width="3"/>`;
-        g += `<text x="${tx}" y="${tY - 4}" text-anchor="${anchor}" font-size="15" font-weight="700" fill="${c}">${esc(inc.transformer || 'Transformer')}</text>`;
+        g += `<text x="${tx}" y="${tY - 4}" text-anchor="${anchor}" font-size="15" font-weight="700" fill="${c}" text-decoration="underline">${esc(inc.transformer || 'Transformer')}</text>`;
         if (inc.ratio) g += `<text x="${tx}" y="${tY + 15}" text-anchor="${anchor}" font-size="12" fill="#475569">${esc(inc.ratio)}</text>`;
       }
+      if (up) g += '</g>';
       g += breakerSymbol(ix, swY, c);
       g += `<text x="${tx}" y="${swY - 4}" text-anchor="${anchor}" font-size="14" font-weight="700" fill="#1c2733">${esc(inc.name || 'Incomer')}</text>`;
       const sub = [inc.panel, inc.rating_a != null ? fmtA(inc.rating_a) + ' A' : ''].filter(Boolean).join(' · ');
@@ -3514,6 +3519,21 @@
       : `<div class="search-empty">No matches for “${esc(q)}”</div>`;
     searchResults.hidden = false;
   }, 180);
+  // Finds what feeds the open board (a transformer, say) on the HV drawings
+  // and opens that drawing with it brought into view.
+  // The way landing on the board, through that transformer, comes first: it
+  // is where the board sits on the main drawing.
+  async function openOnHV(q) {
+    const key = t => String(t || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    let h = state.boardId ? await api('GET', `/api/boards/${state.boardId}/hv-feed?tx=` + encodeURIComponent(q)) : null;
+    if (!h) {
+      const hits = await api('GET', '/api/hv/search?q=' + encodeURIComponent(q));
+      h = hits.find(x => key(x.title) === key(q)) || hits[0];
+    }
+    if (!h) { toast(q + ' is not on the HV overview yet', 'error'); return; }
+    h.hv = true;
+    gotoHit(h);
+  }
   function gotoHit(h) {
     hideSearch(); searchInput.value = '';
     if (h.hv) {
@@ -3633,6 +3653,8 @@
       case 'hv-add-coupler': hvCouplerForm(null); break;
       case 'hv-edit-coupler': if (canManage()) hvCouplerForm(hvFindCoupler(id)); break;
       case 'hv-open-dest': state.boardId = id; navigate(boardHash('sld', id)); break;
+      // Up from a board's incomer to the transformer feeding it.
+      case 'sld-open-hv': openOnHV(el.dataset.q); break;
       // Across to another drawing, landing on the switchboard the way feeds.
       case 'hv-open-drawing': navigate('#/hv/' + id + (el.dataset.board ? '?focus=hv-board-' + el.dataset.board : '')); break;
       // The same designation on another drawing.

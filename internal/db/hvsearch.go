@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/superforcesuytr-droid/power-distribution-system/internal/model"
 )
 
@@ -86,6 +88,40 @@ func (s *Store) HVSearch(ctx context.Context, q string, limit int) ([]model.HVSe
 		out = append(out, h)
 	}
 	return out, rows.Err()
+}
+
+// BoardFeed finds where a board is fed from on the HV drawings: the way
+// that lands on it, picked by the board or by a label that reads as its code.
+// Of several, the one through the named transformer comes first, then one on
+// a high-tension drawing. It returns nil when no way lands on the board.
+func (s *Store) BoardFeed(ctx context.Context, boardID int64, transformer string) (*model.HVSearchHit, error) {
+	pool, err := s.getPool()
+	if err != nil {
+		return nil, err
+	}
+	var h model.HVSearchHit
+	err = pool.QueryRow(ctx, `
+		SELECT 'way', w.name, concat_ws(' · ', nullif(w.dest_label, ''), nullif(w.dest_detail, ''), sb.name),
+		       n.id, n.name, 'hv-way-' || w.id
+		  FROM hv_ways w
+		  JOIN hv_sections sec ON sec.id = w.section_id
+		  JOIN hv_switchboards sb ON sb.id = sec.switchboard_id
+		  JOIN hv_networks n ON n.id = sec.network_id
+		  JOIN boards bo ON bo.id = $1
+		 WHERE w.dest_board_id = bo.id
+		    OR (w.dest_board_id IS NULL AND w.dest_switchboard_id IS NULL AND w.dest_label ~ '[[:alnum:]]'
+		        AND upper(regexp_replace(w.dest_label, '[^[:alnum:]]', '', 'g')) = upper(regexp_replace(bo.code, '[^[:alnum:]]', '', 'g')))
+		 ORDER BY CASE WHEN $2 <> '' AND (upper(w.dest_detail) = upper($2)
+		            OR EXISTS (SELECT 1 FROM hv_devices d WHERE d.way_id = w.id AND upper(d.name) = upper($2))) THEN 0 ELSE 1 END,
+		          CASE WHEN n.tier = 'ht' THEN 0 ELSE 1 END, n.position, n.id, w.position
+		 LIMIT 1`, boardID, strings.TrimSpace(transformer)).Scan(&h.Kind, &h.Title, &h.Subtitle, &h.NetworkID, &h.Drawing, &h.Focus)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &h, nil
 }
 
 // MCCBNames lists every MCCB by name with the board it is on, for naming what

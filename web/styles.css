@@ -415,6 +415,8 @@ svg.moving-column .hv-col:not(.dragging) { opacity: .55; }
 .sld-node:hover rect.box { fill: #eef6fc; }
 .sld-btn, .sld-pill { cursor: pointer; }
 .sld-btn:hover rect { fill: var(--primary-soft); }
+.sld-up:hover rect { fill: transparent; }
+.sld-up:hover circle:first-of-type { fill: var(--primary-soft); }
 .sld-pill rect { transition: fill .12s; }
 .sld-pill:hover rect { fill: var(--primary-soft); }
 .sld-node.flash rect.box { animation: sldflash 1.7s ease-out; }
