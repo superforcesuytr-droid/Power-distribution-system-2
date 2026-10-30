@@ -282,6 +282,31 @@ type BoardTotals struct {
 	CircuitCount        int     `json:"circuit_count"`
 	UtilPct             int     `json:"util_pct"`
 	UtilLevel           string  `json:"util_level"`
+	// CapacityBasis says what the capacity is: the MCBs' ratings, or on a
+	// switch room board the incomers feeding it ("incomers"), or its MCCBs'
+	// ratings while no incomer rating is on record ("mccbs").
+	CapacityBasis string `json:"capacity_basis"`
+}
+
+// IncomerCapacity is how much a board can take in through its incomers: both
+// together while the bus section is open, each feeding its own half; one
+// only once the bus section is closed and a single incomer carries the board.
+// It is zero when no incomer rating is on record.
+func (d *BoardDetail) IncomerCapacity() float64 {
+	var sum, max float64
+	for _, in := range d.Incomers {
+		if in.RatingA == nil {
+			continue
+		}
+		sum += *in.RatingA
+		if *in.RatingA > max {
+			max = *in.RatingA
+		}
+	}
+	if d.BusSectionClosed {
+		return max
+	}
+	return sum
 }
 
 // BoardDetail is the full breaker tree for one board with all metrics.
@@ -343,6 +368,15 @@ func (d *BoardDetail) Compute(s Settings) {
 		t.MCCBCapacity += m.RatingA
 		t.CircuitCount += m.CircuitCount
 		t.MCCBCount++
+	}
+	t.CapacityBasis = "mcbs"
+	if d.MCCBOnly {
+		t.CapacityBasis = "mccbs"
+		// What a switch room board can carry is set by what comes in, not
+		// by adding up the outgoing MCCBs.
+		if c := d.IncomerCapacity(); c > 0 {
+			t.MCBCapacity, t.CapacityBasis = c, "incomers"
+		}
 	}
 	t.UtilPct = s.Percent(t.TotalCurrent, t.MCBCapacity)
 	t.UtilLevel = s.Level(t.UtilPct)

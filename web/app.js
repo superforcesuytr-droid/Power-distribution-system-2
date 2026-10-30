@@ -371,7 +371,7 @@
       <div class="totals">
         <span class="cap">CURRENT TOTALS</span>
         <div class="tot"><span class="l">Total Current</span><span class="v ${levelClass(t.util_level)}">${fmtA(t.total_current)}<span class="unit">A</span></span></div>
-        <div class="tot"><span class="l">${only ? 'MCCB' : 'MCB'} Capacity</span><span class="v">${fmtA(t.mcb_capacity)}<span class="unit">A</span></span></div>
+        <div class="tot" title="${esc(capacityNote(b))}"><span class="l">${{ incomers: 'Incomer Capacity', mccbs: 'MCCB Capacity' }[t.capacity_basis] || 'MCB Capacity'}</span><span class="v">${fmtA(t.mcb_capacity)}<span class="unit">A</span></span>${t.capacity_basis === 'incomers' ? `<span class="hint">${esc(capacityNote(b))}</span>` : ''}</div>
         ${only ? '' : `
         <div class="tot"><span class="l">Active Circuits</span><span class="v level-normal">${t.active_circuits}</span></div>
         <div class="tot"><span class="l">Under Maintenance</span><span class="v level-warning">${t.maintenance_circuits}</span></div>`}
@@ -386,6 +386,15 @@
       ${!b.mccbs.length ? `
         <div class="empty"><h2>No MCCBs on this board</h2><p>${only ? 'Add each MCCB with what it feeds and where its panel stands.' : 'Add an MCCB, then MCBs beneath it, then circuits.'}</p></div>`
         : only ? mccbPlaces(b) : b.mccbs.map(m => mccbSection(m)).join('')}`;
+  }
+
+  // What the incomer capacity on a switch room board is made of.
+  function capacityNote(b) {
+    const rated = (b.incomers || []).filter(i => i.rating_a != null);
+    if (b.totals.capacity_basis !== 'incomers') return '';
+    if (rated.length < 2) return 'Through ' + (rated[0].name || 'the incomer');
+    if (b.bus_section_closed) return 'Bus section closed: one incomer carries the board';
+    return rated.map(i => fmtA(i.rating_a) + ' A').join(' + ') + ', one per section';
   }
 
   function boardCard(bo) {

@@ -218,6 +218,7 @@ input, select, textarea { font: inherit; color: inherit; }
 .totals .cap { font-size: 11px; letter-spacing: .1em; color: var(--muted); font-weight: 600; }
 .tot { display: flex; flex-direction: column; gap: 2px; }
 .tot .l { font-size: 12px; color: var(--muted); }
+.tot .hint { font-size: 11px; color: var(--muted); }
 .tot .v { font-family: var(--mono); font-size: 20px; font-weight: 700; }
 .tot .v.small { font-size: 16px; }
 .tot .v .unit { font-size: 15px; margin-left: 4px; }
