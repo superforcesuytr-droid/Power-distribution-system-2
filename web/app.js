@@ -821,9 +821,10 @@
           <span class="muted">${esc(b.voltage)} ${esc(b.phases)}${[b.level, b.location].filter(Boolean).length ? ' · ' + esc([b.level, b.location].filter(Boolean).join(', ')) : ''}</span>
           <div class="counts">
             <div><div class="n">${b.totals.mccb_count}</div><div class="l">MCCBs</div></div>
+            ${b.mccb_only ? `<div><div class="n">${fmtA(b.totals.mcb_capacity)} A</div><div class="l">${b.totals.capacity_basis === 'incomers' ? 'Incomer capacity' : 'MCCB capacity'}</div></div>` : `
             <div><div class="n">${b.totals.mcb_count}</div><div class="l">MCBs</div></div>
             <div><div class="n">${b.totals.circuit_count}</div><div class="l">Circuits</div></div>
-            <div><div class="n ${levelClass(b.totals.util_level)}">${fmtA(b.totals.total_current)} A</div><div class="l">Load</div></div>
+            <div><div class="n ${levelClass(b.totals.util_level)}">${fmtA(b.totals.total_current)} A</div><div class="l">Load</div></div>`}
           </div>
         </div>
         <div class="legend"><span class="lbl">LOAD:</span>
