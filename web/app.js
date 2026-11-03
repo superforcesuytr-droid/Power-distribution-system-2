@@ -463,15 +463,13 @@
           <span class="pill pill-blue">${fmtA(m.rating_a)}A</span>
           ${breakerStatusBadge('mccb', m)}
           <span class="feeds" title="${esc(m.feeds || '')}">${m.feeds ? '→ ' + esc(m.feeds) : ''}</span>
-          <span class="load">
-            ${m.load_a != null ? `${bar(m.pct, m.level)}
+          ${m.load_a != null ? `<span class="load">${bar(m.pct, m.level)}
             <span class="cur ${levelClass(m.level)}">${fmtA(m.current)} A</span>
             <span class="muted">/ ${fmtA(m.capacity)} A</span>
-            <span class="${levelClass(m.level)}">(${m.pct}%)</span>` : ''}
-          </span>
-          ${historyButton('mccb', m.id)}
+            <span class="${levelClass(m.level)}">(${m.pct}%)</span></span>` : ''}
+          <span class="acts">${historyButton('mccb', m.id)}
           ${canEdit() ? `<button class="btn btn-ghost btn-sm" data-action="edit-mccb" data-id="${m.id}" title="Edit MCCB">✎</button>` : ''}
-          ${canManage() ? `<button class="btn btn-ghost btn-sm" data-action="delete-mccb" data-id="${m.id}" title="Delete MCCB">🗑</button>` : ''}
+          ${canManage() ? `<button class="btn btn-ghost btn-sm" data-action="delete-mccb" data-id="${m.id}" title="Delete MCCB">🗑</button>` : ''}</span>
         </div>
       </div>`;
     const collapsed = state.collapsed.has('mccb-' + m.id);

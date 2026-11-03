@@ -551,4 +551,34 @@ button.bstatus:hover { filter: brightness(.92); }
 .mccb-only { margin-bottom: 8px; }
 .mccb-only .feeds { font-size: 13px; color: var(--text); min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mccb-only .load { flex: none; }
+.mccb-only .acts { display: flex; flex: none; margin-left: auto; }
+.mccb-only .load + .acts { margin-left: 0; }
 @media (max-width: 760px) { .mccb-only .mccb-head { flex-wrap: wrap; } .mccb-only .feeds { flex-basis: 100%; order: 5; } }
+
+/* A phone: the top bar wraps onto two rows - brand, search and role, then
+   the tabs, which scroll sideways - and the board comes before the list of
+   buildings, so opening one shows it straight away. */
+@media (max-width: 640px) {
+  .topbar { flex-wrap: wrap; height: auto; padding: 8px 12px 0; gap: 8px; }
+  .brand { min-width: 0; }
+  .search { order: 1; min-width: 0; flex: 1 1 0; margin-left: 0; }
+  .role { order: 2; font-size: 0; }
+  .role select { font-size: 13px; }
+  #settings-btn { order: 3; }
+  .tabs { order: 4; flex: 1 1 100%; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tabs a { padding: 11px 14px; white-space: nowrap; }
+  .dashboard { min-height: 0; }
+  .dashboard .content { order: -1; padding: 16px 12px 40px; }
+  .board-head { flex-wrap: wrap; }
+  .totals { flex-wrap: wrap; gap: 12px 20px; }
+  .mccb-head { flex-wrap: wrap; gap: 8px; }
+  .mccb-head .load { margin-left: 0; }
+  .mccb-head .btn-sm { padding: 4px 6px; }
+  .mccb-head .pill, .mccb-head .bstatus { font-size: 11px; }
+  .hv-counts { flex-wrap: wrap; gap: 10px 18px; }
+  .hv-toolbar, .sld-tools { flex-wrap: wrap; }
+  .sld-summary { flex-wrap: wrap; padding: 12px 14px; }
+  .sld-summary .counts { margin-left: 0; flex-wrap: wrap; gap: 10px 18px; }
+  .page { padding-left: 12px; padding-right: 12px; }
+}
